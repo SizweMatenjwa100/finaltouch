@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1066230435036",
+    "project_id": "finaltouch-6102d",
+    "storage_bucket": "finaltouch-6102d.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1066230435036:android:bed9f642ca081ab991f819",
+        "android_client_info": {
+          "package_name": "com.finaltouchcompany.finaltouch"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDAxamFHlfVy3xqYjjbFyOPj_b0K_A1Z5M"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
