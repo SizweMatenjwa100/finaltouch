@@ -23,7 +23,7 @@ class _AddonsState extends State<Addons> {
       crossAxisAlignment: CrossAxisAlignment.start, // left-align the title
       children: [
         Text(
-          "Step 3: Add-ons",
+          "Add-ons",
           style: GoogleFonts.manrope(fontSize: 20, fontWeight: FontWeight.bold),
         ),
         SizedBox(height: 16),

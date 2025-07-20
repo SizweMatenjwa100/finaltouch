@@ -11,32 +11,52 @@ class Bookbuildstep2 extends StatefulWidget {
 }
 
 class _Bookbuildstep2State extends State<Bookbuildstep2> {
-  String _selected ='Basic';
-  final List<String> _options=[
-    'Basic',
-    'Standard',
-    'Premium',
-    'Move In/Out'
+  String _selected ='Standard';
+ final List<Map<String, String>> _options=[
+   {
+     'title':'Standard',
+     'subtitle':'Basic cleaning: Dusting, vacuuming, mopping.'
+   },
+   {
+     'title':'Deep Cleaning',
+     'subtitle':'Thorough cleaning: Includes standard plus detailed cleaning of all areas.',
+   },
+   {
+     'title':'Premium Cleaning',
+     'subtitle':'Thorough cleaning: Includes standard plus detailed cleaning of all areas.',
+   },
+   {
+     'title':'Move-In/Out',
+     'subtitle':'leaning for moving: Empty property cleaning, all surfaces',
+   },
+   {
+     'title':'Spring Clean',
+     'subtitle':'Seasonal cleaning: Deep clean, focusing on neglected areas.'
+   }
 
-  ];
+ ];
   @override
   Widget build(BuildContext context) {
     return Column(
      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
 
-        Text("Step 2: Cleaning Type", style: GoogleFonts.manrope(fontSize: 20, fontWeight: FontWeight.bold),
+        Text("Cleaning Type", style: GoogleFonts.manrope(fontSize: 20, fontWeight: FontWeight.bold),
         ),
         SizedBox(height: 20,),
         ..._options.map((option)=>Padding(padding: EdgeInsets.only(bottom: 12),
           child:
-          RadioListTile(
-              value: option, groupValue: _selected, onChanged:(value){
+          RadioListTile<String>(
+              value: option['title']!,
+            groupValue: _selected,
+            onChanged:(value){
                 setState(() {
                   _selected=value!;
                 });
           },
-            title: Text(option,style: GoogleFonts.manrope(fontSize: 16 ),),
+            title: Text(option['title']!,style: GoogleFonts.manrope(fontSize: 16, fontWeight: FontWeight.bold),),
+            subtitle: Text(option['subtitle']!,style: GoogleFonts.manrope(fontSize: 16 ),),
+
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(12),
               side:BorderSide(

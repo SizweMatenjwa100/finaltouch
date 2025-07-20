@@ -1,166 +1,173 @@
-import 'dart:ffi';
-
-import 'package:finaltouch/homepage.dart';
-import 'package:finaltouch/main_navigation.dart';
-import 'package:finaltouch/presentation/auth/pages/registerpage.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:google_fonts/google_fonts.dart';
+import '../../../features/auth/logic/auth_bloc.dart';
+import '../../../main_navigation.dart';
+import 'registerpage.dart';
 
-class LoginScreen extends StatelessWidget {
+class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
+
+  @override
+  State<LoginScreen> createState() => _LoginScreenState();
+}
+
+class _LoginScreenState extends State<LoginScreen> {
+  final TextEditingController _emailController = TextEditingController();
+  final TextEditingController _passwordController = TextEditingController();
+
+  void _loginUser() {
+    final email = _emailController.text.trim();
+    final password = _passwordController.text.trim();
+
+    context.read<AuthBloc>().add(LoginRequested(email: email, password: password));
+  }
+
+  @override
+  void dispose() {
+    _emailController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: SafeArea(child:
-      SingleChildScrollView(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            Image.asset('assets/images/Banner.png', fit:BoxFit.cover, width: double.infinity,),
-            SizedBox(height: 30,),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(8, 0, 0, 0),
-              child: Text("Get your home, office, or car cleaned!",
-                style: GoogleFonts.plusJakartaSans(fontWeight: FontWeight.bold,fontSize: 21),
-                textAlign: TextAlign.center,
-              ),
-            ),
-            SizedBox(height: 20,),
-            Padding(
-              padding: const EdgeInsets.all(8.0),
-              child: SizedBox(
-                width: MediaQuery.of(context).size.width * 0.92,
-                height: 56,
-                child: TextFormField(
-                  decoration: InputDecoration(
-                    hintText: "Email",
-                    filled: true,
-                    fillColor: Color(0xffE8F0F2),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide.none
-                    )
+      body: SafeArea(
+        child: BlocListener<AuthBloc, AuthState>(
+          listener: (context, state) {
+            if (state is AuthLoading) {
+              showDialog(
+                context: context,
+                barrierDismissible: false,
+                builder: (_) => const Center(child: CircularProgressIndicator(
+                  color: Color(0xFFE8F0F2),
+                )),
+              );
+            } else if (state is AuthSuccess) {
+              Navigator.of(context).pop(); // Remove loading
+              Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const MainNavigation()));
+            } else if (state is AuthFailure) {
+              Navigator.of(context).pop(); // Remove loading
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(state.error)));
+            }
+          },
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Image.asset('assets/images/Banner.png', fit: BoxFit.cover, width: double.infinity),
+                const SizedBox(height: 30),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 0, 0, 0),
+                  child: Text(
+                    "Get your home, office, or car cleaned!",
+                    style: GoogleFonts.plusJakartaSans(fontWeight: FontWeight.bold, fontSize: 21),
+                    textAlign: TextAlign.center,
                   ),
-
                 ),
-              ),
-
-            ),
-            SizedBox(height: 12,),
-            Padding(
-              padding: const EdgeInsets.all(8.0),
-              child: SizedBox(
-                width: MediaQuery.of(context).size.width * 0.92,
-                height: 56,
-                child: TextFormField(
-                  decoration: InputDecoration(
-                      hintText: "Password",
-                      filled: true,
-                      fillColor: Color(0xffE8F0F2),
-                      border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                          borderSide: BorderSide.none
-                      )
+                const SizedBox(height: 20),
+                _buildTextField(_emailController, "Email"),
+                const SizedBox(height: 12),
+                _buildTextField(_passwordController, "Password", isPassword: true),
+                const SizedBox(height: 5),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(22, 0, 0, 0),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text("Forgot your password?",
+                        style: GoogleFonts.plusJakartaSans(color: const Color(0xff4F8296))),
                   ),
-
                 ),
-              ),
-
+                const SizedBox(height: 20),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(22, 0, 0, 0),
+                  child: Row(
+                    children: [
+                      OutlinedButton(
+                        onPressed: _loginUser,
+                        style: OutlinedButton.styleFrom(
+                          backgroundColor: const Color(0xFF1CABE3),
+                          side: const BorderSide(color: Color(0xFF1CABE3)),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        ),
+                        child: Text("Login",
+                            style: GoogleFonts.plusJakartaSans(
+                                fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white)),
+                      ),
+                      const SizedBox(width: 10),
+                      OutlinedButton(
+                        onPressed: () {
+                          Navigator.push(context, MaterialPageRoute(builder: (_) => const RegisterPage()));
+                        },
+                        style: OutlinedButton.styleFrom(
+                          backgroundColor: const Color(0xFFE8F0F2),
+                          side: const BorderSide(color: Color(0xFFE8F0F2)),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        ),
+                        child: Text("Register",
+                            style: GoogleFonts.plusJakartaSans(
+                                fontWeight: FontWeight.bold, color: const Color(0xff4F8296), fontSize: 16)),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 15),
+                Text("Or log in with",
+                    style: GoogleFonts.plusJakartaSans(color: const Color(0xFF4F8296), fontSize: 14)),
+                const SizedBox(height: 10),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(22, 0, 0, 0),
+                  child: Row(
+                    children: [
+                      _buildSocialButton("Google"),
+                      const SizedBox(width: 10),
+                      _buildSocialButton("Facebook"),
+                    ],
+                  ),
+                )
+              ],
             ),
-            SizedBox(height: 5,),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(22, 0, 0, 0),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.start,
-                children: [
-                  Text("Forgot your password?", textAlign: TextAlign.start,style: GoogleFonts.plusJakartaSans(color:Color(0xff4F8296)),),
-                ],
-              ),
-            ),
-            SizedBox(height: 20,),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(22, 0, 0, 0),
-              child: Row(
-                children: [
-                  OutlinedButton(onPressed: (){
-                    Navigator.push(context, MaterialPageRoute(builder: (context)=>MainNavigation()));
-                  },style: OutlinedButton.styleFrom(
-                    backgroundColor: Color(0xFF1CABE3),
-                    side: BorderSide( color:Color(0xFF1CABE3)),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                  ),
-                    child: Text("Login", style:
-                  GoogleFonts.plusJakartaSans(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
-
-                  ),
-
-                  ),
-                  SizedBox(width: 10,),
-                  OutlinedButton(onPressed: (){
-                    Navigator.push(context, MaterialPageRoute(builder: (context)=>RegisterPage()));
-                  },style:
-                  OutlinedButton.styleFrom(
-
-                    side: BorderSide(color:Color(0xFFE8F0F2)),
-                    backgroundColor: Color(0xFFE8F0F2),
-                    shape:RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12)
-                    )
-                  ),
-                      child: Text("Register",style: GoogleFonts.plusJakartaSans(fontWeight: FontWeight.bold,color:Color(0xff4F8296), fontSize: 16),),
-                  ),
-
-
-                ],
-              ),
-
-
-            ),
-            SizedBox(height: 15,),
-            Text("Or log in with",style: GoogleFonts.plusJakartaSans(color:Color(0xFF4F8296), fontSize: 14),
-            ),
-            SizedBox(height: 10,),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(22, 0, 0, 0),
-              child: Row(
-                children: [
-                  OutlinedButton(onPressed: (){},style:
-                  OutlinedButton.styleFrom(
-
-                      side: BorderSide(color:Color(0xFFE8F0F2)),
-                      backgroundColor: Color(0xFFE8F0F2),
-                      shape:RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12)
-                      )
-                  ),
-                    child: Text("Google",style: GoogleFonts.plusJakartaSans(fontWeight: FontWeight.bold,color:Color(0xff4F8296), fontSize: 16),),
-                  ),
-                  SizedBox(width: 10,),
-                  OutlinedButton(onPressed: (){},style:
-                  OutlinedButton.styleFrom(
-
-                      side: BorderSide(color:Color(0xFFE8F0F2)),
-                      backgroundColor: Color(0xFFE8F0F2),
-                      shape:RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12)
-                      )
-                  ),
-                    child: Text("Facebook",style: GoogleFonts.plusJakartaSans(fontWeight: FontWeight.bold,color:Color(0xff4F8296), fontSize: 16),),
-                  ),
-
-                ],
-              ),
-            )
-
-
-
-          ],
+          ),
         ),
-      )
       ),
+    );
+  }
+
+  Widget _buildTextField(TextEditingController controller, String hint, {bool isPassword = false}) {
+    return Padding(
+      padding: const EdgeInsets.all(8.0),
+      child: SizedBox(
+        width: MediaQuery.of(context).size.width * 0.92,
+        height: 56,
+        child: TextFormField(
+          controller: controller,
+          obscureText: isPassword,
+          decoration: InputDecoration(
+            hintText: hint,
+            filled: true,
+            fillColor: const Color(0xffE8F0F2),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide.none,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSocialButton(String text) {
+    return OutlinedButton(
+      onPressed: () {},
+      style: OutlinedButton.styleFrom(
+        backgroundColor: const Color(0xFFE8F0F2),
+        side: const BorderSide(color: Color(0xFFE8F0F2)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+      child: Text(text,
+          style: GoogleFonts.plusJakartaSans(
+              fontWeight: FontWeight.bold, color: const Color(0xff4F8296), fontSize: 16)),
     );
   }
 }

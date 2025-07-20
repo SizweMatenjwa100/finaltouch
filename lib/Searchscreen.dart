@@ -17,7 +17,7 @@ class _SearchscreenState extends State<Searchscreen> {
       appBar: AppBar(
         backgroundColor: Colors.white,
         leading: Icon(Icons.arrow_back),
-        title: Text("Search", style: GoogleFonts.manrope(fontWeight: FontWeight.bold),),
+        title: Text("Search service", style: GoogleFonts.manrope(fontWeight: FontWeight.bold),),
       ),
       body: Padding(
         padding: const EdgeInsets.fromLTRB(16, 5, 16, 0),
@@ -32,7 +32,7 @@ class _SearchscreenState extends State<Searchscreen> {
               cursorColor: Colors.black,
               style: GoogleFonts.manrope(),
               decoration: InputDecoration(
-                hintText: "Search services, packages, cleaner...",
+                hintText: "Search for a service...",
                 hintStyle: GoogleFonts.manrope(
                   color:Colors.grey[600]
                 ),
@@ -44,6 +44,7 @@ class _SearchscreenState extends State<Searchscreen> {
             ),
           
           ),
+
         ),
       )
     );
