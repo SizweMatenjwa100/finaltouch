@@ -1,4 +1,5 @@
 import 'package:finaltouch/features/location/logic/authGate.dart';
+import 'package:finaltouch/presentation/auth/pages/loginscreen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -74,7 +75,7 @@ class MyApp extends StatelessWidget {
       child: MaterialApp(
         title: 'Flutter Demo',
         debugShowCheckedModeBanner: false,
-        home: AuthGate() // You can change this to SplashScreen or AuthGate
+        home:Splashscreen()
       ),
     );
   }

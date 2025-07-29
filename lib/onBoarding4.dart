@@ -1,3 +1,4 @@
+import 'package:finaltouch/features/location/logic/authGate.dart';
 import 'package:finaltouch/presentation/location/location_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -42,7 +43,7 @@ class _onBoarding4State extends State<onBoarding4> {
                     PageRouteBuilder(
                       transitionDuration: const Duration(milliseconds: 300),
                       pageBuilder: (context, animation, secondaryAnimation) =>
-                      const SelectLocationScreen(),
+                      const LoginScreen(),
                       transitionsBuilder:
                           (context, animation, secondaryAnimation, child) {
                         const begin = Offset(1.0, 0.0); // Slide from right

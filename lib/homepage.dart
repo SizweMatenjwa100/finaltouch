@@ -7,7 +7,6 @@ import 'package:google_fonts/google_fonts.dart';
 import 'Searchscreen.dart';
 import 'Servicecard.dart';
 import 'mainBooking.dart';
-import 'showBooking.dart';
 
 class Homepage extends StatefulWidget {
 
@@ -111,9 +110,6 @@ class _HomepageState extends State<Homepage> {
 
               ),
               SizedBox(height: 20,),
-              Showbooking(),
-              SizedBox(height: 20,),
-              Showbooking()
 
 
 

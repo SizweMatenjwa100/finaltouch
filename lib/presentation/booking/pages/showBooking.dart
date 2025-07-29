@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'features/booking/data/booking_Repository.dart'; // Adjust this import to your file structure
+
+import '../../../features/booking/data/booking_Repository.dart';
+
 
 class ShowBookingScreen extends StatelessWidget {
   final BookingRepository bookingRepository;
