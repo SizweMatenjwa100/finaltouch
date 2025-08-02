@@ -1,6 +1,7 @@
 
 import 'package:finaltouch/cleaningpackage.dart';
 import 'package:finaltouch/main_navigation.dart';
+import 'package:finaltouch/presentation/booking/pages/showBooking.dart';
 import 'package:finaltouch/profile.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -75,7 +76,7 @@ class _HomepageState extends State<Homepage> {
               ),
               SizedBox(height: 20,),
               Padding(
-                padding: const EdgeInsets.fromLTRB(20, 0, 300,0),
+                padding: const EdgeInsets.fromLTRB(10, 0, 330,0),
                 child: Text("Services",style: GoogleFonts.manrope(fontSize: 21, color: Colors.black,fontWeight: FontWeight.bold),
                ),
               ),
@@ -99,21 +100,14 @@ class _HomepageState extends State<Homepage> {
                   ),
                 ),
               ),
-              SizedBox(height: 20,),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(0, 0, 110, 0),
-                child: Padding(
-                  padding: const EdgeInsets.only(),
-                  child: Text("Upcoming Appointments",style: GoogleFonts.manrope(fontSize: 21, color: Colors.black,fontWeight: FontWeight.bold), textAlign: TextAlign.start,
-                  ),
-                ),
+              SizedBox(height: 8,),
+              UpcomingBookingsWidget()
 
-              ),
-              SizedBox(height: 20,),
 
 
 
             ],
+
           ),
 
         ),

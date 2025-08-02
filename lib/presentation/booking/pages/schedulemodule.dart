@@ -131,7 +131,7 @@ class _SchedulemoduleState extends State<Schedulemodule> {
           title: Text(
             "Schedule",
             style: GoogleFonts.manrope(fontWeight: FontWeight.bold),
-          ),
+        ),
           leading: IconButton(
               onPressed: () => Navigator.pop(context),
               icon: const Icon(Icons.arrow_back)
