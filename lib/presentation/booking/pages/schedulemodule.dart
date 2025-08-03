@@ -1,4 +1,4 @@
-import 'package:flutter/cupertino.dart';
+// lib/presentation/booking/pages/schedulemodule.dart - WITH DYNAMIC PRICING
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -6,6 +6,8 @@ import 'package:table_calendar/table_calendar.dart';
 import 'package:finaltouch/features/booking/logic/booking_bloc.dart';
 import 'package:finaltouch/features/booking/logic/booking_event.dart';
 import 'package:finaltouch/features/booking/logic/booking_state.dart';
+import '../widgets/dynamic_pricing_widget.dart';
+import '../../../services/pricing_service.dart';
 
 class Schedulemodule extends StatefulWidget {
   final String locationId;
@@ -31,6 +33,7 @@ class _SchedulemoduleState extends State<Schedulemodule> {
 
   void _updateBookingData() {
     if (_selectedTime.isNotEmpty) {
+      print("📅 Updating schedule: $_selectedDate, $_selectedTime, same cleaner: $_sameCleaner");
       context.read<BookingBloc>().add(
         SetSchedule(
           selectedDate: _selectedDate,
@@ -43,35 +46,71 @@ class _SchedulemoduleState extends State<Schedulemodule> {
 
   void _submitBooking() {
     if (_selectedTime.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Please select a time slot"),
-          backgroundColor: Colors.red,
-        ),
-      );
+      _showError("Please select a time slot");
       return;
     }
 
-    // Get current booking data and add locationId
+    // Get current booking data from bloc
     final currentBookingData = context.read<BookingBloc>().currentBookingData;
+
+    // Validate required fields
+    if (currentBookingData['propertyType'] == null || currentBookingData['propertyType'].toString().isEmpty) {
+      _showError("Property type is missing. Please go back and select it.");
+      return;
+    }
+
+    if (currentBookingData['cleaningType'] == null || currentBookingData['cleaningType'].toString().isEmpty) {
+      _showError("Cleaning type is missing. Please go back and select it.");
+      return;
+    }
+
+    // Create complete booking data with location and schedule
     final completeBookingData = {
       ...currentBookingData,
-      'locationId': widget.locationId, // Pass the locationId
+      'locationId': widget.locationId,
       'selectedDate': _selectedDate.toIso8601String(),
       'selectedTime': _selectedTime,
       'sameCleaner': _sameCleaner,
     };
 
-    print("🗓️ Submitting booking for location: ${widget.locationId}");
+    // Add pricing information
+    final priceBreakdown = PricingService.calculatePrice(completeBookingData);
+    completeBookingData['totalPrice'] = priceBreakdown.total;
+    completeBookingData['priceBreakdown'] = {
+      'basePrice': priceBreakdown.basePrice,
+      'roomsPrice': priceBreakdown.roomsPrice,
+      'addOnsPrice': priceBreakdown.addOnsPrice,
+      'sameCleanerFee': priceBreakdown.sameCleanerFee,
+      'estimatedDuration': priceBreakdown.estimatedHours,
+    };
+
+    print("🗓️ Submitting complete booking for location: ${widget.locationId}");
+    print("💰 Total price: ${PricingService.formatPrice(priceBreakdown.total)}");
+
     context.read<BookingBloc>().add(SubmitBooking(completeBookingData));
   }
 
+  void _showError(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            const Icon(Icons.error_outline, color: Colors.white),
+            const SizedBox(width: 8),
+            Expanded(child: Text(message)),
+          ],
+        ),
+        backgroundColor: Colors.red,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      ),
+    );
+  }
+
   bool _isDateAvailable(DateTime date) {
-    // Don't allow past dates
     if (date.isBefore(DateTime.now().subtract(const Duration(days: 1)))) {
       return false;
     }
-    // Don't allow dates more than 3 months in future
     if (date.isAfter(DateTime.now().add(const Duration(days: 90)))) {
       return false;
     }
@@ -79,14 +118,13 @@ class _SchedulemoduleState extends State<Schedulemodule> {
   }
 
   List<String> _getAvailableTimeSlots() {
-    // If selected date is today, filter out past time slots
     if (isSameDay(_selectedDate, DateTime.now())) {
       final now = DateTime.now();
       return _timeSlots.where((timeSlot) {
         final hour = int.parse(timeSlot.split(':')[0]);
         final isAM = timeSlot.contains('AM');
         final hourIn24 = isAM ? (hour == 12 ? 0 : hour) : (hour == 12 ? 12 : hour + 12);
-        return hourIn24 > now.hour + 1; // Allow at least 1 hour notice
+        return hourIn24 > now.hour + 1;
       }).toList();
     }
     return _timeSlots;
@@ -95,7 +133,6 @@ class _SchedulemoduleState extends State<Schedulemodule> {
   @override
   void initState() {
     super.initState();
-    // Set minimum date to tomorrow
     _selectedDate = DateTime.now().add(const Duration(days: 1));
   }
 
@@ -106,32 +143,18 @@ class _SchedulemoduleState extends State<Schedulemodule> {
     return BlocListener<BookingBloc, BookingState>(
       listener: (context, state) {
         if (state is BookingSuccess) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(state.message),
-              backgroundColor: Colors.green,
-              duration: const Duration(seconds: 3),
-            ),
-          );
-          // Navigate back to home or confirmation screen
-          Navigator.popUntil(context, (route) => route.isFirst);
+          _showSuccessDialog();
         } else if (state is BookingError) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text("Booking failed: ${state.error}"),
-              backgroundColor: Colors.red,
-              duration: const Duration(seconds: 4),
-            ),
-          );
+          _showError("Booking failed: ${state.error}");
         }
       },
       child: Scaffold(
         backgroundColor: Colors.white,
         appBar: AppBar(
           title: Text(
-            "Schedule",
+            "Schedule & Confirm",
             style: GoogleFonts.manrope(fontWeight: FontWeight.bold),
-        ),
+          ),
           leading: IconButton(
               onPressed: () => Navigator.pop(context),
               icon: const Icon(Icons.arrow_back)
@@ -139,391 +162,320 @@ class _SchedulemoduleState extends State<Schedulemodule> {
           backgroundColor: Colors.white,
           elevation: 0,
         ),
-        body: SingleChildScrollView(
-          child: Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Location indicator
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.blue.shade50,
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.blue.shade200),
-                  ),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.location_on, color: Colors.blue, size: 20),
-                      const SizedBox(width: 8),
-                      Text(
-                        "Booking for location: ${widget.locationId}",
-                        style: GoogleFonts.manrope(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
+        body: Column(
+          children: [
+            // Sticky pricing header
+            Container(
+              color: Colors.white,
+              padding: const EdgeInsets.all(16),
+              child: const DynamicPricingWidget(
+                isCompact: true,
+                showDetails: false,
+              ),
+            ),
 
-                const SizedBox(height: 20),
-
-                Text(
-                  "Pick a date and time",
-                  style: GoogleFonts.manrope(
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-
-                const SizedBox(height: 8),
-
-                Text(
-                  "Select when you'd like your cleaning service",
-                  style: GoogleFonts.manrope(
-                    fontSize: 14,
-                    color: Colors.grey.shade600,
-                  ),
-                ),
-
-                const SizedBox(height: 20),
-
-                // Calendar
-                Container(
-                  decoration: BoxDecoration(
-                    border: Border.all(color: Colors.grey.shade300),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: TableCalendar(
-                    focusedDay: _selectedDate,
-                    firstDay: DateTime.now(),
-                    lastDay: DateTime.now().add(const Duration(days: 90)),
-                    selectedDayPredicate: (day) => isSameDay(day, _selectedDate),
-                    enabledDayPredicate: _isDateAvailable,
-                    onDaySelected: (selected, focused) {
-                      if (_isDateAvailable(selected)) {
-                        setState(() {
-                          _selectedDate = selected;
-                          // Reset time selection when date changes
-                          _selectedTime = '';
-                        });
-                        _updateBookingData();
-                      }
-                    },
-                    calendarStyle: CalendarStyle(
-                      selectedDecoration: const BoxDecoration(
-                        color: Color(0xFF1CABE3),
-                        shape: BoxShape.circle,
-                      ),
-                      todayDecoration: BoxDecoration(
-                        color: const Color(0xFF1CABE3).withOpacity(0.5),
-                        shape: BoxShape.circle,
-                      ),
-                      disabledDecoration: BoxDecoration(
-                        color: Colors.grey.shade200,
-                        shape: BoxShape.circle,
-                      ),
-                      outsideDaysVisible: false,
-                    ),
-                    headerStyle: const HeaderStyle(
-                      formatButtonVisible: false,
-                      titleCentered: true,
-                    ),
-                  ),
-                ),
-
-                const SizedBox(height: 24),
-
-                // Time slot selection
-                Text(
-                  "Available Time Slots",
-                  style: GoogleFonts.manrope(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-
-                const SizedBox(height: 12),
-
-                if (availableTimeSlots.isEmpty)
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: Colors.orange.shade50,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.orange.shade200),
-                    ),
-                    child: Text(
-                      "No available time slots for selected date. Please choose another date.",
-                      style: GoogleFonts.manrope(
-                        color: Colors.orange.shade700,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  )
-                else
-                  DropdownButtonFormField<String>(
-                    decoration: InputDecoration(
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                      hintText: "Select Time Slot",
-                      hintStyle: GoogleFonts.manrope(),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(
-                          color: _selectedTime.isEmpty ? Colors.red.shade300 : Colors.grey.shade300,
-                          width: 1.2,
-                        ),
-                      ),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(
-                          color: _selectedTime.isEmpty ? Colors.red.shade300 : Colors.grey.shade300,
-                          width: 1.2,
-                        ),
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: const BorderSide(
-                          color: Color(0xFF1CABE3),
-                          width: 2,
-                        ),
-                      ),
-                    ),
-                    value: _selectedTime.isEmpty ? null : _selectedTime,
-                    items: availableTimeSlots.map((time) => DropdownMenuItem(
-                      value: time,
-                      child: Text(
-                        time,
-                        style: GoogleFonts.manrope(),
-                      ),
-                    )).toList(),
-                    onChanged: (value) {
-                      setState(() {
-                        _selectedTime = value!;
-                      });
-                      _updateBookingData();
-                    },
-                  ),
-
-                if (_selectedTime.isEmpty) ...[
-                  const SizedBox(height: 4),
-                  Text(
-                    "Please select a time slot",
-                    style: GoogleFonts.manrope(
-                      color: Colors.red,
-                      fontSize: 12,
-                    ),
-                  ),
-                ],
-
-                const SizedBox(height: 24),
-
-                // Same cleaner option
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    border: Border.all(color: Colors.grey.shade300),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              "Request Same Cleaner",
-                              style: GoogleFonts.manrope(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              "Get the same cleaner for future bookings (subject to availability)",
-                              style: GoogleFonts.manrope(
-                                fontSize: 12,
-                                color: Colors.grey.shade600,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      Switch(
-                        activeColor: const Color(0xFF1CABE3),
-                        value: _sameCleaner,
-                        onChanged: (value) {
-                          setState(() {
-                            _sameCleaner = value;
-                          });
-                          _updateBookingData();
-                        },
-                      ),
-                    ],
-                  ),
-                ),
-
-                const SizedBox(height: 24),
-
-                // Summary & Price
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(20),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF1CABE3).withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(
-                      color: const Color(0xFF1CABE3).withOpacity(0.3),
-                    ),
-                  ),
+            // Scrollable content
+            Expanded(
+              child: SingleChildScrollView(
+                child: Padding(
+                  padding: const EdgeInsets.all(16.0),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      // Booking summary
+                      _buildBookingSummary(),
+                      const SizedBox(height: 24),
+
+                      // Date selection
                       Text(
-                        "Summary & Price Estimate",
+                        "Select Date",
                         style: GoogleFonts.manrope(
-                          fontSize: 18,
+                          fontSize: 20,
                           fontWeight: FontWeight.bold,
-                          color: const Color(0xFF1CABE3),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        "Choose when you'd like your cleaning service",
+                        style: GoogleFonts.manrope(
+                          fontSize: 14,
+                          color: Colors.grey.shade600,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+
+                      // Calendar
+                      Container(
+                        decoration: BoxDecoration(
+                          border: Border.all(color: Colors.grey.shade300),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: TableCalendar(
+                          focusedDay: _selectedDate,
+                          firstDay: DateTime.now(),
+                          lastDay: DateTime.now().add(const Duration(days: 90)),
+                          selectedDayPredicate: (day) => isSameDay(day, _selectedDate),
+                          enabledDayPredicate: _isDateAvailable,
+                          onDaySelected: (selected, focused) {
+                            if (_isDateAvailable(selected)) {
+                              setState(() {
+                                _selectedDate = selected;
+                                _selectedTime = '';
+                              });
+                              _updateBookingData();
+                            }
+                          },
+                          calendarStyle: CalendarStyle(
+                            selectedDecoration: const BoxDecoration(
+                              color: Color(0xFF1CABE3),
+                              shape: BoxShape.circle,
+                            ),
+                            todayDecoration: BoxDecoration(
+                              color: const Color(0xFF1CABE3).withOpacity(0.5),
+                              shape: BoxShape.circle,
+                            ),
+                            weekendDecoration: BoxDecoration(
+                              color: Colors.orange.shade50,
+                              shape: BoxShape.circle,
+                              border: Border.all(color: Colors.orange.shade200),
+                            ),
+                            disabledDecoration: BoxDecoration(
+                              color: Colors.grey.shade200,
+                              shape: BoxShape.circle,
+                            ),
+                            outsideDaysVisible: false,
+                          ),
+                          headerStyle: const HeaderStyle(
+                            formatButtonVisible: false,
+                            titleCentered: true,
+                          ),
                         ),
                       ),
 
-                      const SizedBox(height: 16),
-
-                      BlocBuilder<BookingBloc, BookingState>(
-                        builder: (context, state) {
-                          final bookingData = context.read<BookingBloc>().currentBookingData;
-
-                          return Column(
+                      // Weekend notice
+                      if (_selectedDate.weekday == DateTime.saturday || _selectedDate.weekday == DateTime.sunday) ...[
+                        const SizedBox(height: 12),
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.orange.shade50,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: Colors.orange.shade200),
+                          ),
+                          child: Row(
                             children: [
-                              if (bookingData.isNotEmpty) ...[
-                                _buildSummaryRow("Property Type", bookingData['propertyType'] ?? 'Not selected'),
-                                _buildSummaryRow("Bedrooms", "${bookingData['bedrooms'] ?? 'Not selected'}"),
-                                _buildSummaryRow("Bathrooms", "${bookingData['bathrooms'] ?? 'Not selected'}"),
-                                _buildSummaryRow("Cleaning Type", bookingData['cleaningType'] ?? 'Not selected'),
-                                if (_selectedTime.isNotEmpty)
-                                  _buildSummaryRow("Date & Time", "${_selectedDate.day}/${_selectedDate.month}/${_selectedDate.year} at $_selectedTime"),
-                                if (bookingData.containsKey('addOns')) ...[
-                                  const SizedBox(height: 8),
-                                  Text(
-                                    "Add-ons:",
-                                    style: GoogleFonts.manrope(fontWeight: FontWeight.bold, fontSize: 14),
+                              Icon(Icons.weekend, color: Colors.orange.shade700, size: 16),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  "Weekend service includes a 20% premium charge",
+                                  style: GoogleFonts.manrope(
+                                    fontSize: 12,
+                                    color: Colors.orange.shade700,
+                                    fontWeight: FontWeight.w500,
                                   ),
-                                  ...Map<String, bool>.from(bookingData['addOns'])
-                                      .entries
-                                      .where((entry) => entry.value)
-                                      .map((entry) => Padding(
-                                    padding: const EdgeInsets.only(left: 16, top: 2),
-                                    child: Text("• ${entry.key}", style: GoogleFonts.manrope(fontSize: 12)),
-                                  )),
-                                ],
-                              ],
-
-                              const Divider(height: 24, thickness: 1),
-
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                children: [
-                                  Text(
-                                    "Estimated Total",
-                                    style: GoogleFonts.manrope(
-                                      fontSize: 18,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                  Text(
-                                    "R450",
-                                    style: GoogleFonts.manrope(
-                                      fontSize: 20,
-                                      fontWeight: FontWeight.bold,
-                                      color: const Color(0xFF1CABE3),
-                                    ),
-                                  ),
-                                ],
-                              ),
-
-                              const SizedBox(height: 8),
-
-                              Text(
-                                "Final price may vary based on property condition",
-                                style: GoogleFonts.manrope(
-                                  fontSize: 12,
-                                  color: Colors.grey.shade600,
-                                  fontStyle: FontStyle.italic,
                                 ),
                               ),
                             ],
-                          );
-                        },
+                          ),
+                        ),
+                      ],
+
+                      const SizedBox(height: 24),
+
+                      // Time selection
+                      Text(
+                        "Select Time",
+                        style: GoogleFonts.manrope(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
+                      const SizedBox(height: 16),
+
+                      if (availableTimeSlots.isEmpty)
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: Colors.orange.shade50,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: Colors.orange.shade200),
+                          ),
+                          child: Text(
+                            "No available time slots for selected date. Please choose another date.",
+                            style: GoogleFonts.manrope(
+                              color: Colors.orange.shade700,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        )
+                      else
+                        Column(
+                          children: availableTimeSlots.map((timeSlot) {
+                            final isSelected = _selectedTime == timeSlot;
+                            final isPeak = timeSlot == '10:00 AM - 12:00 PM' ||
+                                timeSlot == '12:00 PM - 2:00 PM' ||
+                                timeSlot == '2:00 PM - 4:00 PM';
+
+                            return Padding(
+                              padding: const EdgeInsets.only(bottom: 8),
+                              child: InkWell(
+                                onTap: () {
+                                  setState(() {
+                                    _selectedTime = timeSlot;
+                                  });
+                                  _updateBookingData();
+                                },
+                                borderRadius: BorderRadius.circular(12),
+                                child: Container(
+                                  padding: const EdgeInsets.all(16),
+                                  decoration: BoxDecoration(
+                                    color: isSelected
+                                        ? const Color(0xFF1CABE3).withOpacity(0.1)
+                                        : Colors.white,
+                                    border: Border.all(
+                                      color: isSelected
+                                          ? const Color(0xFF1CABE3)
+                                          : Colors.grey.shade300,
+                                      width: isSelected ? 2 : 1,
+                                    ),
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Icon(
+                                        Icons.access_time,
+                                        color: isSelected
+                                            ? const Color(0xFF1CABE3)
+                                            : Colors.grey.shade600,
+                                        size: 20,
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: Text(
+                                          timeSlot,
+                                          style: GoogleFonts.manrope(
+                                            fontSize: 16,
+                                            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                                            color: isSelected ? const Color(0xFF1CABE3) : Colors.black,
+                                          ),
+                                        ),
+                                      ),
+                                      if (isPeak)
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                          decoration: BoxDecoration(
+                                            color: Colors.orange.shade100,
+                                            borderRadius: BorderRadius.circular(12),
+                                          ),
+                                          child: Text(
+                                            "+10% Peak",
+                                            style: GoogleFonts.manrope(
+                                              fontSize: 10,
+                                              fontWeight: FontWeight.w600,
+                                              color: Colors.orange.shade700,
+                                            ),
+                                          ),
+                                        ),
+                                      if (isSelected)
+                                        Container(
+                                          margin: const EdgeInsets.only(left: 8),
+                                          padding: const EdgeInsets.all(4),
+                                          decoration: const BoxDecoration(
+                                            color: Color(0xFF1CABE3),
+                                            shape: BoxShape.circle,
+                                          ),
+                                          child: const Icon(
+                                            Icons.check,
+                                            color: Colors.white,
+                                            size: 16,
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            );
+                          }).toList(),
+                        ),
+
+                      const SizedBox(height: 24),
+
+                      // Same cleaner option
+                      Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          border: Border.all(color: Colors.grey.shade300),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    "Request Same Cleaner",
+                                    style: GoogleFonts.manrope(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    "Get the same cleaner for future bookings (+R50)",
+                                    style: GoogleFonts.manrope(
+                                      fontSize: 12,
+                                      color: Colors.grey.shade600,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            Switch(
+                              activeColor: const Color(0xFF1CABE3),
+                              value: _sameCleaner,
+                              onChanged: (value) {
+                                setState(() {
+                                  _sameCleaner = value;
+                                });
+                                _updateBookingData();
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+
+                      const SizedBox(height: 24),
+
+                      // Final pricing
+                      const DynamicPricingWidget(showDetails: true),
+
+                      const SizedBox(height: 32),
                     ],
                   ),
                 ),
+              ),
+            ),
 
-                const SizedBox(height: 32),
-
-                // Submit booking button
-                SizedBox(
-                  width: double.infinity,
-                  height: 50,
-                  child: BlocBuilder<BookingBloc, BookingState>(
-                    builder: (context, state) {
-                      final isLoading = state is BookingLoading;
-
-                      return ElevatedButton(
-                        onPressed: (isLoading || _selectedTime.isEmpty) ? null : _submitBooking,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF1CABE3),
-                          disabledBackgroundColor: Colors.grey.shade300,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          elevation: _selectedTime.isNotEmpty ? 2 : 0,
-                        ),
-                        child: isLoading
-                            ? const Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                              ),
-                            ),
-                            SizedBox(width: 12),
-                            Text(
-                              "Submitting...",
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.white,
-                              ),
-                            ),
-                          ],
-                        )
-                            : Text(
-                          "Confirm Booking",
-                          style: GoogleFonts.plusJakartaSans(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                            color: _selectedTime.isNotEmpty ? Colors.white : Colors.grey.shade600,
-                          ),
-                        ),
-                      );
-                    },
+            // Bottom confirm button
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.1),
+                    blurRadius: 8,
+                    offset: const Offset(0, -2),
                   ),
-                ),
-
-                const SizedBox(height: 16),
-
-                // Terms and conditions
-                Center(
-                  child: Text(
+                ],
+              ),
+              child: Column(
+                children: [
+                  // Terms
+                  Text(
                     "By confirming, you agree to our Terms of Service and Privacy Policy",
                     textAlign: TextAlign.center,
                     style: GoogleFonts.manrope(
@@ -531,35 +483,248 @@ class _SchedulemoduleState extends State<Schedulemodule> {
                       color: Colors.grey.shade600,
                     ),
                   ),
-                ),
+                  const SizedBox(height: 16),
 
-                const SizedBox(height: 20),
-              ],
+                  // Confirm button
+                  BlocBuilder<BookingBloc, BookingState>(
+                    builder: (context, state) {
+                      final isLoading = state is BookingLoading;
+                      final canSubmit = _selectedTime.isNotEmpty;
+
+                      return SizedBox(
+                        width: double.infinity,
+                        height: 56,
+                        child: ElevatedButton(
+                          onPressed: (isLoading || !canSubmit) ? null : _submitBooking,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: canSubmit
+                                ? const Color(0xFF1CABE3)
+                                : Colors.grey.shade300,
+                            disabledBackgroundColor: Colors.grey.shade300,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            elevation: canSubmit ? 4 : 0,
+                          ),
+                          child: isLoading
+                              ? const Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                                ),
+                              ),
+                              SizedBox(width: 12),
+                              Text(
+                                "Confirming Booking...",
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.white,
+                                ),
+                              ),
+                            ],
+                          )
+                              : Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              const Icon(Icons.check_circle, color: Colors.white),
+                              const SizedBox(width: 8),
+                              Text(
+                                canSubmit ? "Confirm Booking" : "Please select time",
+                                style: GoogleFonts.plusJakartaSans(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                  color: canSubmit ? Colors.white : Colors.grey.shade600,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ],
+              ),
             ),
-          ),
+          ],
         ),
       ),
     );
   }
 
-  Widget _buildSummaryRow(String label, String value) {
+  Widget _buildBookingSummary() {
+    return BlocBuilder<BookingBloc, BookingState>(
+      builder: (context, state) {
+        final data = context.read<BookingBloc>().currentBookingData;
+
+        return Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [
+                const Color(0xFF1CABE3).withOpacity(0.1),
+                Colors.white,
+              ],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: const Color(0xFF1CABE3).withOpacity(0.3)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.summarize, color: Color(0xFF1CABE3), size: 20),
+                  const SizedBox(width: 8),
+                  Text(
+                    "Booking Summary",
+                    style: GoogleFonts.manrope(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: const Color(0xFF1CABE3),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+
+              if (data['propertyType'] != null)
+                _buildSummaryRow(
+                  Icons.home,
+                  "Property",
+                  "${data['propertyType']} • ${data['bedrooms']} bed • ${data['bathrooms']} bath",
+                ),
+
+              if (data['cleaningType'] != null)
+                _buildSummaryRow(
+                  Icons.cleaning_services,
+                  "Service",
+                  data['cleaningType'],
+                ),
+
+              if (data['addOns'] != null)
+                _buildSummaryRow(
+                  Icons.add_circle_outline,
+                  "Add-ons",
+                  _getSelectedAddOnsText(data['addOns']),
+                ),
+
+              _buildSummaryRow(
+                Icons.location_on,
+                "Location",
+                widget.locationId,
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildSummaryRow(IconData icon, String label, String value) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
+          Icon(icon, size: 16, color: Colors.grey.shade600),
+          const SizedBox(width: 8),
           Text(
-            label,
+            "$label:",
             style: GoogleFonts.manrope(
-              fontSize: 14,
-              color: Colors.grey.shade700,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: Colors.grey.shade600,
             ),
           ),
-          Text(
-            value,
-            style: GoogleFonts.manrope(
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              value,
+              style: GoogleFonts.manrope(
+                fontSize: 12,
+                color: Colors.black87,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _getSelectedAddOnsText(Map<String, dynamic> addOns) {
+    final selected = addOns.entries
+        .where((entry) => entry.value == true)
+        .map((entry) => entry.key)
+        .toList();
+
+    return selected.isEmpty ? "None selected" : selected.join(", ");
+  }
+
+  void _showSuccessDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: const BoxDecoration(
+                color: Color(0xFF1CABE3),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.check,
+                color: Colors.white,
+                size: 32,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              "Booking Confirmed!",
+              style: GoogleFonts.manrope(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              "Your cleaning service has been successfully booked. You'll receive a confirmation email shortly.",
+              textAlign: TextAlign.center,
+              style: GoogleFonts.manrope(
+                color: Colors.grey.shade600,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: () {
+                Navigator.of(context).pop(); // Close dialog
+                Navigator.popUntil(context, (route) => route.isFirst); // Go to home
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF1CABE3),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              child: Text(
+                "Continue",
+                style: GoogleFonts.manrope(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
             ),
           ),
         ],

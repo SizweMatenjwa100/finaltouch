@@ -1,4 +1,4 @@
-import 'package:flutter/cupertino.dart';
+// lib/presentation/booking/widgets/BookbuildStep1.dart - FIXED VERSION
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -19,7 +19,8 @@ class _WidgetStepState extends State<WidgetStep> {
   String? _selectedPropertyType;
 
   void _updateBookingData() {
-    if (_selectedPropertyType != null) {
+    if (_selectedPropertyType != null && _selectedPropertyType!.isNotEmpty) {
+      print("🏠 Updating property info: $_selectedPropertyType, $_bedrooms bed, $_bathrooms bath");
       context.read<BookingBloc>().add(
         SetPropertyInfo(
           propertyType: _selectedPropertyType!,
@@ -58,154 +59,229 @@ class _WidgetStepState extends State<WidgetStep> {
             ),
             const SizedBox(height: 20),
 
-            // Dropdown
-            DropdownButtonFormField<String>(
-              value: _selectedPropertyType,
-              decoration: InputDecoration(
-                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                fillColor: const Color(0xFFF5F5F5),
-                filled: true,
-                hintText: "Select Property Type",
-                hintStyle: GoogleFonts.manrope(
-                  fontWeight: FontWeight.w800,
-                  color: Colors.black,
-                  fontSize: 16,
+            // Dropdown with validation indicator
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                DropdownButtonFormField<String>(
+                  value: _selectedPropertyType,
+                  decoration: InputDecoration(
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                    fillColor: const Color(0xFFF5F5F5),
+                    filled: true,
+                    hintText: "Select Property Type *",
+                    hintStyle: GoogleFonts.manrope(
+                      fontWeight: FontWeight.w600,
+                      color: _selectedPropertyType == null ? Colors.red.shade400 : Colors.black,
+                      fontSize: 16,
+                    ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: BorderSide(
+                        color: _selectedPropertyType == null ? Colors.red.shade300 : Colors.grey.shade300,
+                        width: 1.2,
+                      ),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: BorderSide(
+                        color: _selectedPropertyType == null ? Colors.red.shade300 : Colors.grey.shade300,
+                        width: 1.2,
+                      ),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: BorderSide(
+                        color: _selectedPropertyType == null ? Colors.red.shade300 : const Color(0xFF1CABE3),
+                        width: 1.5,
+                      ),
+                    ),
+                  ),
+                  items: ['Apartment', 'House', 'Cottage'].map((e) {
+                    return DropdownMenuItem(
+                        value: e,
+                        child: Text(e, style: GoogleFonts.manrope())
+                    );
+                  }).toList(),
+                  onChanged: (val) {
+                    setState(() {
+                      _selectedPropertyType = val;
+                    });
+                    _updateBookingData();
+                  },
                 ),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
-                  borderSide: BorderSide(color: Colors.grey.shade300, width: 1.2),
-                ),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
-                  borderSide: BorderSide(color: Colors.grey.shade300, width: 1.2),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
-                  borderSide: BorderSide(color: Colors.grey.shade300, width: 1.5),
-                ),
+                if (_selectedPropertyType == null) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    "Property type is required",
+                    style: GoogleFonts.manrope(
+                      color: Colors.red,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+
+            const SizedBox(height: 30),
+
+            // Bedrooms counter
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.grey.shade300),
+                borderRadius: BorderRadius.circular(12),
               ),
-              items: ['Apartment', 'House', 'Cottage'].map((e) {
-                return DropdownMenuItem(
-                    value: e,
-                    child: Text(e, style: GoogleFonts.manrope())
-                );
-              }).toList(),
-              onChanged: (val) {
-                setState(() {
-                  _selectedPropertyType = val;
-                });
-                _updateBookingData();
-              },
+              child: Row(
+                children: [
+                  Text(
+                    "Bedrooms",
+                    style: GoogleFonts.manrope(fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                  const Spacer(),
+                  IconButton(
+                    onPressed: () {
+                      if (_bedrooms > 1) {
+                        setState(() {
+                          _bedrooms--;
+                        });
+                        _updateBookingData();
+                      }
+                    },
+                    icon: Icon(
+                      Icons.remove_circle_outline,
+                      color: _bedrooms > 1 ? const Color(0xFF1CABE3) : Colors.grey,
+                    ),
+                  ),
+                  Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1CABE3).withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Center(
+                      child: Text(
+                        "$_bedrooms",
+                        style: GoogleFonts.manrope(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: const Color(0xFF1CABE3),
+                        ),
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: () {
+                      if (_bedrooms < 10) {
+                        setState(() {
+                          _bedrooms++;
+                        });
+                        _updateBookingData();
+                      }
+                    },
+                    icon: const Icon(
+                      Icons.add_circle_outline,
+                      color: Color(0xFF1CABE3),
+                    ),
+                  ),
+                ],
+              ),
             ),
 
-            const SizedBox(height: 30),
+            const SizedBox(height: 15),
 
-            // Bedrooms
-            Row(
-              children: [
-                Text(
-                  "Bedrooms",
-                  style: GoogleFonts.manrope(fontSize: 16, fontWeight: FontWeight.bold),
-                ),
-                const Spacer(),
-                IconButton(
-                  onPressed: () {
-                    if (_bedrooms > 1) {
-                      setState(() {
-                        _bedrooms--;
-                      });
-                      _updateBookingData();
-                    }
-                  },
-                  icon: const Icon(Icons.remove_circle_outline),
-                ),
-                Text(
-                  "$_bedrooms",
-                  style: GoogleFonts.manrope(fontSize: 16, fontWeight: FontWeight.bold),
-                ),
-                IconButton(
-                  onPressed: () {
-                    setState(() {
-                      _bedrooms++;
-                    });
-                    _updateBookingData();
-                  },
-                  icon: const Icon(Icons.add_circle_outline),
-                ),
-              ],
-            ),
-
-            const SizedBox(height: 30),
-
-            // Bathrooms
-            Row(
-              children: [
-                Text(
-                  "Bathrooms",
-                  style: GoogleFonts.manrope(fontSize: 16, fontWeight: FontWeight.bold),
-                ),
-                const Spacer(),
-                IconButton(
-                  onPressed: () {
-                    if (_bathrooms > 1) {
-                      setState(() {
-                        _bathrooms--;
-                      });
-                      _updateBookingData();
-                    }
-                  },
-                  icon: const Icon(Icons.remove_circle_outline),
-                ),
-                Text(
-                  "$_bathrooms",
-                  style: GoogleFonts.manrope(fontSize: 16, fontWeight: FontWeight.bold),
-                ),
-                IconButton(
-                  onPressed: () {
-                    setState(() {
-                      _bathrooms++;
-                    });
-                    _updateBookingData();
-                  },
-                  icon: const Icon(Icons.add_circle_outline),
-                ),
-              ],
+            // Bathrooms counter
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.grey.shade300),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                children: [
+                  Text(
+                    "Bathrooms",
+                    style: GoogleFonts.manrope(fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                  const Spacer(),
+                  IconButton(
+                    onPressed: () {
+                      if (_bathrooms > 1) {
+                        setState(() {
+                          _bathrooms--;
+                        });
+                        _updateBookingData();
+                      }
+                    },
+                    icon: Icon(
+                      Icons.remove_circle_outline,
+                      color: _bathrooms > 1 ? const Color(0xFF1CABE3) : Colors.grey,
+                    ),
+                  ),
+                  Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1CABE3).withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Center(
+                      child: Text(
+                        "$_bathrooms",
+                        style: GoogleFonts.manrope(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: const Color(0xFF1CABE3),
+                        ),
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: () {
+                      if (_bathrooms < 10) {
+                        setState(() {
+                          _bathrooms++;
+                        });
+                        _updateBookingData();
+                      }
+                    },
+                    icon: const Icon(
+                      Icons.add_circle_outline,
+                      color: Color(0xFF1CABE3),
+                    ),
+                  ),
+                ],
+              ),
             ),
 
             const SizedBox(height: 20),
 
-            // Debug info (optional - shows current booking data)
+            // Current selection display
             BlocBuilder<BookingBloc, BookingState>(
               builder: (context, state) {
-                if (state is BookingDataUpdated && state.bookingData.isNotEmpty) {
+                final data = context.read<BookingBloc>().currentBookingData;
+                if (data.isNotEmpty && data.containsKey('propertyType')) {
                   return Container(
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: Colors.blue.shade50,
+                      color: Colors.green.shade50,
                       borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.green.shade200),
                     ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                    child: Row(
                       children: [
-                        Text(
-                          "Current Selection:",
-                          style: GoogleFonts.manrope(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 12,
+                        Icon(Icons.check_circle, color: Colors.green.shade600, size: 20),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            "Property: ${data['propertyType']} with ${data['bedrooms']} bedrooms and ${data['bathrooms']} bathrooms",
+                            style: GoogleFonts.manrope(
+                              fontWeight: FontWeight.w600,
+                              fontSize: 12,
+                              color: Colors.green.shade700,
+                            ),
                           ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          "Property: ${state.bookingData['propertyType'] ?? 'Not selected'}",
-                          style: GoogleFonts.manrope(fontSize: 12),
-                        ),
-                        Text(
-                          "Bedrooms: ${state.bookingData['bedrooms'] ?? 'Not set'}",
-                          style: GoogleFonts.manrope(fontSize: 12),
-                        ),
-                        Text(
-                          "Bathrooms: ${state.bookingData['bathrooms'] ?? 'Not set'}",
-                          style: GoogleFonts.manrope(fontSize: 12),
                         ),
                       ],
                     ),
