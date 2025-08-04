@@ -1,4 +1,3 @@
-// lib/main.dart - UPDATED WITH PAYMENT INTEGRATION
 import 'package:finaltouch/features/location/logic/authGate.dart';
 import 'package:finaltouch/presentation/auth/pages/loginscreen.dart';
 import 'package:flutter/material.dart';
@@ -19,11 +18,11 @@ import 'features/location/data/repositories/location_repository.dart';
 import 'features/location/logic/locationBloc.dart';
 import 'features/location/logic/locationEvent.dart';
 
-// BOOKING
+// BOOKING ✅ (case corrected)
 import 'features/booking/data/booking_Repository.dart';
 import 'features/booking/logic/booking_bloc.dart';
 
-// PAYMENT - NEW
+// PAYMENT ✅ (new)
 import 'features/payment/data/payment_repository.dart';
 import 'features/payment/logic/payment_bloc.dart';
 
@@ -67,7 +66,7 @@ class MyApp extends StatelessWidget {
           )..add(CheckLocationEvent()),
         ),
 
-        // BOOKING BLOC
+        // BOOKING BLOC ✅
         BlocProvider(
           create: (_) => BookingBloc(
             bookingRepository: BookingRepository(
@@ -77,7 +76,7 @@ class MyApp extends StatelessWidget {
           ),
         ),
 
-        // PAYMENT BLOC - NEW
+        // PAYMENT BLOC ✅ (new)
         BlocProvider(
           create: (_) => PaymentBloc(
             paymentRepository: PaymentRepository(
@@ -90,12 +89,7 @@ class MyApp extends StatelessWidget {
       child: MaterialApp(
         title: 'Final Touch',
         debugShowCheckedModeBanner: false,
-        theme: ThemeData(
-          primarySwatch: Colors.blue,
-          primaryColor: const Color(0xFF1CABE3),
-          fontFamily: 'Manrope',
-        ),
-        home: const Splashscreen(),
+        home: Splashscreen(),
       ),
     );
   }

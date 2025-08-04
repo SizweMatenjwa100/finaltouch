@@ -1,42 +1,48 @@
-
+// lib/features/payment/logic/payment_event.dart
 abstract class PaymentEvent {}
 
 class InitiatePayment extends PaymentEvent {
-  final String bookingId;
-  final String locationId;
-  final double amount;
-  final String itemName;
-  final String itemDescription;
   final Map<String, dynamic> bookingData;
+  final double amount;
+  final String currency;
 
   InitiatePayment({
-    required this.bookingId,
-    required this.locationId,
-    required this.amount,
-    required this.itemName,
-    required this.itemDescription,
     required this.bookingData,
+    required this.amount,
+    this.currency = 'ZAR',
   });
 }
 
-class ProcessPaymentCallback extends PaymentEvent {
-  final String merchantOrderId;
-  final String paymentStatus;
-  final Map<String, dynamic> callbackData;
+class ProcessPaymentSuccess extends PaymentEvent {
+  final String paymentId;
+  final String paymentToken;
+  final Map<String, dynamic> paymentDetails;
 
-  ProcessPaymentCallback({
-    required this.merchantOrderId,
-    required this.paymentStatus,
-    required this.callbackData,
+  ProcessPaymentSuccess({
+    required this.paymentId,
+    required this.paymentToken,
+    required this.paymentDetails,
   });
 }
 
-class CheckPaymentStatus extends PaymentEvent {
-  final String merchantOrderId;
+class ProcessPaymentFailure extends PaymentEvent {
+  final String error;
+  final String? paymentId;
 
-  CheckPaymentStatus({required this.merchantOrderId});
+  ProcessPaymentFailure({
+    required this.error,
+    this.paymentId,
+  });
 }
 
-class LoadPaymentHistory extends PaymentEvent {}
+class RetryPayment extends PaymentEvent {
+  final Map<String, dynamic> bookingData;
+  final double amount;
+
+  RetryPayment({
+    required this.bookingData,
+    required this.amount,
+  });
+}
 
 class ResetPayment extends PaymentEvent {}

@@ -1,66 +1,67 @@
-
+// lib/features/payment/logic/payment_state.dart
 abstract class PaymentState {}
 
 class PaymentInitial extends PaymentState {}
 
-class PaymentLoading extends PaymentState {}
+class PaymentInitiating extends PaymentState {
+  final String message;
+  PaymentInitiating({this.message = "Initiating payment..."});
+}
 
-class PaymentInitiated extends PaymentState {
-  final String merchantOrderId;
+class PaymentReady extends PaymentState {
   final String paymentUrl;
-  final Map<String, String> paymentData;
+  final String paymentId;
+  final Map<String, dynamic> paymentData;
 
-  PaymentInitiated({
-    required this.merchantOrderId,
+  PaymentReady({
     required this.paymentUrl,
+    required this.paymentId,
     required this.paymentData,
   });
 }
 
+class PaymentProcessing extends PaymentState {
+  final String paymentId;
+  final String message;
+
+  PaymentProcessing({
+    required this.paymentId,
+    this.message = "Processing payment...",
+  });
+}
+
 class PaymentSuccess extends PaymentState {
-  final String merchantOrderId;
+  final String paymentId;
+  final String bookingId;
+  final Map<String, dynamic> paymentDetails;
   final String message;
 
   PaymentSuccess({
-    required this.merchantOrderId,
-    required this.message,
+    required this.paymentId,
+    required this.bookingId,
+    required this.paymentDetails,
+    this.message = "Payment successful! Booking confirmed.",
   });
 }
 
 class PaymentFailed extends PaymentState {
   final String error;
-  final String? merchantOrderId;
+  final String? paymentId;
+  final bool canRetry;
 
   PaymentFailed({
     required this.error,
-    this.merchantOrderId,
+    this.paymentId,
+    this.canRetry = true,
   });
 }
 
 class PaymentCancelled extends PaymentState {
-  final String merchantOrderId;
-
-  PaymentCancelled({required this.merchantOrderId});
-}
-
-class PaymentPending extends PaymentState {
-  final String merchantOrderId;
+  final String? paymentId;
   final String message;
 
-  PaymentPending({
-    required this.merchantOrderId,
-    required this.message,
+  PaymentCancelled({
+    this.paymentId,
+    this.message = "Payment was cancelled",
   });
-}
-
-class PaymentHistoryLoaded extends PaymentState {
-  final List<Map<String, dynamic>> payments;
-
-  PaymentHistoryLoaded({required this.payments});
-}
-
-class PaymentError extends PaymentState {
-  final String error;
-
-  PaymentError({required this.error});
 }

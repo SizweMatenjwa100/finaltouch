@@ -24,9 +24,9 @@ dependencies:
   google_place: ^0.4.7
   cloud_firestore: ^5.6.11
   webview_flutter: ^4.4.2
-  crypto: ^3.0.3
   http: ^0.13.6
-  url_launcher: ^6.2.1
+  crypto: ^3.0.3
+  url_launcher: ^6.2.2
 
 
 dev_dependencies:

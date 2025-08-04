@@ -1,310 +1,354 @@
 // lib/features/payment/data/payment_repository.dart
+import 'dart:convert';
+import 'dart:math';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:crypto/crypto.dart';
+import 'package:http/http.dart' as http;
 
 class PaymentRepository {
-  final FirebaseFirestore firestore;
   final FirebaseAuth auth;
+  final FirebaseFirestore firestore;
+
+  // PayFast credentials - Replace with your actual credentials
+  static const String merchantId = "10000100"; // Replace with your merchant ID
+  static const String merchantKey = "46f0cd694581a"; // Replace with your merchant key
+  static const String passphrase = ""; // Empty for sandbox, set for production
+  static const bool sandboxMode = true; // Set to false for production
 
   PaymentRepository({
-    required this.firestore,
     required this.auth,
+    required this.firestore,
   });
 
-  /// Save payment record to Firestore
-  Future<String> savePaymentRecord({
-    required String bookingId,
-    required String merchantOrderId,
+  /// Generate PayFast payment URL and data
+  Future<Map<String, dynamic>> initializePayment({
+    required Map<String, dynamic> bookingData,
     required double amount,
-    required String status,
-    required Map<String, dynamic> paymentData,
+    required String currency,
   }) async {
-    final user = auth.currentUser;
-    if (user == null) {
-      throw Exception("User not authenticated");
-    }
-
     try {
-      // Convert paymentData to proper format for Firestore
-      final Map<String, Object> firestoreData = {
-        'bookingId': bookingId,
-        'merchantOrderId': merchantOrderId,
-        'amount': amount,
-        'status': status,
-        'userId': user.uid,
-        'createdAt': FieldValue.serverTimestamp(),
-        'updatedAt': FieldValue.serverTimestamp(),
+      final user = auth.currentUser;
+      if (user == null) {
+        throw Exception("User must be authenticated to make payments");
+      }
+
+      // Generate unique payment ID
+      final paymentId = _generatePaymentId();
+      final timestamp = DateTime.now();
+
+      // Create a shortened version of booking data for PayFast (under 255 chars)
+      final shortBookingData = {
+        'type': bookingData['cleaningType'] ?? 'Standard',
+        'property': bookingData['propertyType'] ?? 'House',
+        'rooms': '${bookingData['bedrooms'] ?? 1}bed ${bookingData['bathrooms'] ?? 1}bath',
+        'date': bookingData['selectedDate']?.toString().substring(0, 10) ?? '',
+        'time': bookingData['selectedTime'] ?? '',
+        'locationId': bookingData['locationId'] ?? '',
       };
 
-      // Safely convert paymentData
-      paymentData.forEach((key, value) {
-        if (value != null) {
-          if (value is Map<String, dynamic>) {
-            // Convert nested maps
-            final Map<String, Object> nestedMap = {};
-            value.forEach((nestedKey, nestedValue) {
-              if (nestedValue != null) {
-                nestedMap[nestedKey] = nestedValue as Object;
-              }
-            });
-            firestoreData[key] = nestedMap;
-          } else {
-            firestoreData[key] = value as Object;
-          }
-        }
-      });
+      // Prepare PayFast data
+      final paymentData = {
+        'merchant_id': merchantId,
+        'merchant_key': merchantKey,
+        'return_url': _getReturnUrl(),
+        'cancel_url': _getCancelUrl(),
+        'notify_url': _getNotifyUrl(),
+        'name_first': _getFirstName(user),
+        'name_last': _getLastName(user),
+        'email_address': user.email ?? '',
+        'cell_number': '', // Add if you collect phone numbers
+        'm_payment_id': paymentId,
+        'amount': amount.toStringAsFixed(2),
+        'item_name': _getItemName(bookingData),
+        'item_description': _getItemDescription(bookingData),
+        'custom_str1': user.uid, // User ID for reference
+        'custom_str2': jsonEncode(shortBookingData), // Shortened booking data (under 255 chars)
+        'custom_str3': paymentId, // Payment reference
+      };
 
-      final paymentDoc = await firestore
-          .collection('users')
-          .doc(user.uid)
-          .collection('payments')
-          .add(firestoreData);
+      // Ensure custom_str2 is under 255 characters
+      if (paymentData['custom_str2']!.length > 255) {
+        // If still too long, use minimal data
+        final minimalData = {
+          'paymentId': paymentId,
+          'userId': user.uid,
+          'locationId': bookingData['locationId'] ?? '',
+        };
+        paymentData['custom_str2'] = jsonEncode(minimalData);
+      }
 
-      print("✅ Payment record saved with ID: ${paymentDoc.id}");
-      return paymentDoc.id;
+      print("📝 PayFast custom_str2 length: ${paymentData['custom_str2']!.length}");
+      print("📝 PayFast custom_str2 content: ${paymentData['custom_str2']}");
+
+      // Generate signature
+      final signature = _generateSignature(paymentData);
+      paymentData['signature'] = signature;
+
+      // Generate PayFast URL
+      final paymentUrl = _generatePaymentUrl(paymentData);
+
+      // Save payment record to Firestore (with full booking data)
+      await _savePaymentRecord(
+        paymentId: paymentId,
+        userId: user.uid,
+        bookingData: bookingData, // Save full data to Firestore
+        amount: amount,
+        currency: currency,
+        paymentData: paymentData,
+        timestamp: timestamp,
+      );
+
+      return {
+        'paymentId': paymentId,
+        'paymentUrl': paymentUrl,
+        'paymentData': paymentData,
+      };
     } catch (e) {
-      print("❌ Error saving payment record: $e");
+      print("❌ Error initializing payment: $e");
       rethrow;
     }
   }
 
-  /// Create booking after successful payment
-  Future<void> _createBookingAfterPayment(Map<String, dynamic> paymentRecord, String bookingId) async {
-    final user = auth.currentUser;
-    if (user == null) {
-      throw Exception("User not authenticated");
-    }
-
+  /// Process successful payment and save booking
+  Future<String> processSuccessfulPayment({
+    required String paymentId,
+    required String paymentToken,
+    required Map<String, dynamic> paymentDetails,
+  }) async {
     try {
-      print("🏗️ Creating booking after successful payment");
+      final user = auth.currentUser;
+      if (user == null) {
+        throw Exception("User must be authenticated");
+      }
 
-      final paymentData = paymentRecord['paymentData'] as Map<String, dynamic>;
-      final locationId = paymentData['locationId'] as String;
+      // Get payment record
+      final paymentDoc = await firestore
+          .collection('payments')
+          .doc(paymentId)
+          .get();
 
-      print("📍 Location ID: $locationId");
-      print("🆔 Booking ID: $bookingId");
+      if (!paymentDoc.exists) {
+        throw Exception("Payment record not found");
+      }
 
-      // Create the booking with confirmed status
-      final bookingData = <String, Object>{
-        'userId': user.uid,
-        'userEmail': user.email ?? '',
-        'propertyType': paymentData['propertyType'] ?? '',
-        'bedrooms': paymentData['bedrooms'] ?? 1,
-        'bathrooms': paymentData['bathrooms'] ?? 1,
-        'cleaningType': paymentData['cleaningType'] ?? '',
-        'addOns': paymentData['addOns'] ?? {},
-        'selectedDate': paymentData['selectedDate'] ?? '',
-        'selectedTime': paymentData['selectedTime'] ?? '',
-        'sameCleaner': paymentData['sameCleaner'] ?? false,
-        'status': 'confirmed', // Booking is confirmed after payment
-        'paymentStatus': 'complete',
-        'totalPrice': paymentData['totalPrice'] ?? 0.0,
-        'priceBreakdown': paymentData['priceBreakdown'] ?? {},
-        'createdAt': FieldValue.serverTimestamp(),
-        'timestamp': FieldValue.serverTimestamp(),
-        'locationId': locationId,
-        'notes': '',
+      final paymentData = paymentDoc.data()!;
+      final bookingData = Map<String, dynamic>.from(
+        jsonDecode(paymentData['bookingData']),
+      );
+
+      // Update payment status
+      await firestore.collection('payments').doc(paymentId).update({
+        'status': 'completed',
+        'paymentToken': paymentToken,
+        'paymentDetails': paymentDetails,
+        'completedAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+
+      // Save booking to bookings collection
+      final locationId = await _getUserLocationId();
+      if (locationId == null) {
+        throw Exception("User location not found");
+      }
+
+      // Prepare complete booking data
+      final completeBookingData = {
+        ...bookingData,
+        'paymentId': paymentId,
+        'paymentStatus': 'paid',
+        'totalAmount': paymentData['amount'],
+        'currency': paymentData['currency'],
+        'status': 'confirmed', // Confirmed since payment is successful
+        'paidAt': FieldValue.serverTimestamp(),
       };
 
-      await firestore
+      // Save to bookings collection
+      final bookingRef = await firestore
           .collection('users')
           .doc(user.uid)
           .collection('locations')
           .doc(locationId)
           .collection('bookings')
-          .doc(bookingId)
-          .set(bookingData);
+          .add(completeBookingData);
 
-      print("✅ Booking created successfully in Firestore: $bookingId");
+      print("✅ Booking saved successfully: ${bookingRef.id}");
+      print("💰 Payment processed successfully: $paymentId");
 
+      return bookingRef.id;
     } catch (e) {
-      print("❌ Error creating booking after payment: $e");
+      print("❌ Error processing payment: $e");
       rethrow;
     }
   }
 
-  /// Update payment status
-  Future<void> updatePaymentStatus({
+  /// Handle failed payment
+  Future<void> processFailedPayment({
     required String paymentId,
-    required String status,
-    Map<String, dynamic>? additionalData,
+    required String error,
   }) async {
-    final user = auth.currentUser;
-    if (user == null) {
-      throw Exception("User not authenticated");
-    }
-
     try {
-      final updateData = <String, Object>{
-        'status': status,
+      await firestore.collection('payments').doc(paymentId).update({
+        'status': 'failed',
+        'error': error,
+        'failedAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
-      };
+      });
 
-      if (additionalData != null) {
-        // Convert additionalData to Map<String, Object>
-        additionalData.forEach((key, value) {
-          if (value != null) {
-            updateData[key] = value as Object;
-          }
-        });
-      }
-
-      await firestore
-          .collection('users')
-          .doc(user.uid)
-          .collection('payments')
-          .doc(paymentId)
-          .update(updateData);
-
-      print("✅ Payment status updated to: $status");
+      print("💥 Payment failed: $paymentId - $error");
     } catch (e) {
-      print("❌ Error updating payment status: $e");
+      print("❌ Error updating failed payment: $e");
       rethrow;
     }
   }
 
-  /// Get payment by merchant order ID
-  Future<Map<String, dynamic>?> getPaymentByOrderId(String merchantOrderId) async {
-    final user = auth.currentUser;
-    if (user == null) {
-      throw Exception("User not authenticated");
-    }
+  /// Get user's location ID
+  Future<String?> _getUserLocationId() async {
+    final uid = auth.currentUser?.uid;
+    if (uid == null) return null;
 
     try {
-      final querySnapshot = await firestore
+      final locationsSnapshot = await firestore
           .collection('users')
-          .doc(user.uid)
-          .collection('payments')
-          .where('merchantOrderId', isEqualTo: merchantOrderId)
+          .doc(uid)
+          .collection('locations')
           .limit(1)
           .get();
 
-      if (querySnapshot.docs.isNotEmpty) {
-        final doc = querySnapshot.docs.first;
-        final data = doc.data();
-        data['paymentId'] = doc.id;
-        return data;
+      if (locationsSnapshot.docs.isNotEmpty) {
+        return locationsSnapshot.docs.first.id;
       }
-
       return null;
     } catch (e) {
-      print("❌ Error getting payment by order ID: $e");
+      print("❌ Error getting location: $e");
       return null;
     }
   }
 
-  /// Get user's payment history
-  Future<List<Map<String, dynamic>>> getUserPayments() async {
-    final user = auth.currentUser;
-    if (user == null) {
-      throw Exception("User not authenticated");
-    }
-
-    try {
-      final querySnapshot = await firestore
-          .collection('users')
-          .doc(user.uid)
-          .collection('payments')
-          .orderBy('createdAt', descending: true)
-          .get();
-
-      return querySnapshot.docs.map((doc) {
-        final data = doc.data();
-        data['paymentId'] = doc.id;
-        return data;
-      }).toList();
-    } catch (e) {
-      print("❌ Error getting user payments: $e");
-      return [];
-    }
+  /// Generate unique payment ID
+  String _generatePaymentId() {
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    final random = Random().nextInt(9999);
+    return 'PAY_${timestamp}_$random';
   }
 
-  /// Update booking payment status
-  Future<void> updateBookingPaymentStatus({
-    required String bookingId,
-    required String paymentStatus,
-    required String locationId,
-  }) async {
-    final user = auth.currentUser;
-    if (user == null) {
-      throw Exception("User not authenticated");
+  /// Generate PayFast signature
+  String _generateSignature(Map<String, dynamic> data) {
+    // Remove signature if it exists
+    final dataToSign = Map<String, dynamic>.from(data);
+    dataToSign.remove('signature');
+
+    // Sort keys alphabetically
+    final sortedKeys = dataToSign.keys.toList()..sort();
+    final pairs = <String>[];
+
+    // Build query string with proper encoding
+    for (final key in sortedKeys) {
+      final value = dataToSign[key].toString().trim();
+      if (value.isNotEmpty) {
+        // URL encode both key and value
+        final encodedKey = Uri.encodeQueryComponent(key);
+        final encodedValue = Uri.encodeQueryComponent(value);
+        pairs.add('$encodedKey=$encodedValue');
+      }
     }
 
-    try {
-      await firestore
-          .collection('users')
-          .doc(user.uid)
-          .collection('locations')
-          .doc(locationId)
-          .collection('bookings')
-          .doc(bookingId)
-          .update(<String, Object>{
-        'paymentStatus': paymentStatus,
-        'updatedAt': FieldValue.serverTimestamp(),
-      });
+    String queryString = pairs.join('&');
 
-      print("✅ Booking payment status updated to: $paymentStatus");
-    } catch (e) {
-      print("❌ Error updating booking payment status: $e");
-      rethrow;
+    // Add passphrase for sandbox mode
+    if (sandboxMode && passphrase.isNotEmpty) {
+      queryString += '&passphrase=${Uri.encodeQueryComponent(passphrase)}';
     }
+
+    print("🔐 Signature query string: $queryString");
+
+    // Generate MD5 hash
+    final bytes = utf8.encode(queryString);
+    final digest = md5.convert(bytes);
+
+    final signature = digest.toString();
+    print("🔐 Generated signature: $signature");
+
+    return signature;
   }
 
-  /// Process payment callback from PayFast
-  Future<void> processPaymentCallback({
-    required String merchantOrderId,
-    required String paymentStatus,
-    required Map<String, dynamic> callbackData,
+  /// Generate PayFast payment URL
+  String _generatePaymentUrl(Map<String, dynamic> data) {
+    final baseUrl = sandboxMode
+        ? 'https://sandbox.payfast.co.za/eng/process'
+        : 'https://www.payfast.co.za/eng/process';
+
+    // Build query parameters with proper encoding
+    final queryParams = data.entries
+        .map((e) => '${Uri.encodeQueryComponent(e.key)}=${Uri.encodeQueryComponent(e.value.toString())}')
+        .join('&');
+
+    final fullUrl = '$baseUrl?$queryParams';
+    print("🌐 PayFast URL length: ${fullUrl.length}");
+    print("🌐 PayFast URL: ${fullUrl.substring(0, fullUrl.length > 200 ? 200 : fullUrl.length)}...");
+
+    return fullUrl;
+  }
+
+  /// Save payment record to Firestore
+  Future<void> _savePaymentRecord({
+    required String paymentId,
+    required String userId,
+    required Map<String, dynamic> bookingData,
+    required double amount,
+    required String currency,
+    required Map<String, dynamic> paymentData,
+    required DateTime timestamp,
   }) async {
-    try {
-      // Find the payment record
-      final paymentRecord = await getPaymentByOrderId(merchantOrderId);
-      if (paymentRecord == null) {
-        throw Exception("Payment record not found for order: $merchantOrderId");
-      }
+    await firestore.collection('payments').doc(paymentId).set({
+      'paymentId': paymentId,
+      'userId': userId,
+      'bookingData': jsonEncode(bookingData), // Store full booking data in Firestore
+      'amount': amount,
+      'currency': currency,
+      'status': 'pending',
+      'paymentMethod': 'payfast',
+      'paymentData': paymentData,
+      'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
 
-      final paymentId = paymentRecord['paymentId'] as String;
-      final bookingId = paymentRecord['bookingId'] as String;
+    print("💾 Payment record saved with full booking data");
+  }
 
-      // Update payment status
-      await updatePaymentStatus(
-        paymentId: paymentId,
-        status: paymentStatus,
-        additionalData: {
-          'callbackData': callbackData,
-          'callbackReceivedAt': FieldValue.serverTimestamp(),
-        },
-      );
+  // Helper methods for PayFast data
+  String _getReturnUrl() => 'https://yourapp.com/payment/success';
+  String _getCancelUrl() => 'https://yourapp.com/payment/cancel';
+  String _getNotifyUrl() => 'https://yourapp.com/payment/notify';
 
-      // Update booking status based on payment
-      String bookingStatus;
-      switch (paymentStatus.toLowerCase()) {
-        case 'complete':
-          bookingStatus = 'confirmed';
-          break;
-        case 'failed':
-        case 'cancelled':
-          bookingStatus = 'payment_failed';
-          break;
-        default:
-          bookingStatus = 'pending_payment';
-      }
-
-      // Note: We would need the locationId to update booking
-      // For now, we'll store it in the payment record during creation
-      final locationId = paymentRecord['locationId'] as String?;
-      if (locationId != null) {
-        await updateBookingPaymentStatus(
-          bookingId: bookingId,
-          paymentStatus: paymentStatus,
-          locationId: locationId,
-        );
-      }
-
-      print("✅ Payment callback processed successfully");
-    } catch (e) {
-      print("❌ Error processing payment callback: $e");
-      rethrow;
+  String _getFirstName(User user) {
+    final displayName = user.displayName ?? '';
+    if (displayName.isNotEmpty) {
+      return displayName.split(' ').first;
     }
+    return 'Customer';
+  }
+
+  String _getLastName(User user) {
+    final displayName = user.displayName ?? '';
+    if (displayName.isNotEmpty) {
+      final parts = displayName.split(' ');
+      return parts.length > 1 ? parts.sublist(1).join(' ') : '';
+    }
+    return '';
+  }
+
+  String _getItemName(Map<String, dynamic> bookingData) {
+    final cleaningType = bookingData['cleaningType'] ?? 'Cleaning Service';
+    return cleaningType;
+  }
+
+  String _getItemDescription(Map<String, dynamic> bookingData) {
+    final cleaningType = bookingData['cleaningType'] ?? 'Cleaning Service';
+    final propertyType = bookingData['propertyType'] ?? '';
+    final bedrooms = bookingData['bedrooms'] ?? 1;
+    final bathrooms = bookingData['bathrooms'] ?? 1;
+
+    return '$cleaningType for $propertyType ($bedrooms bed, $bathrooms bath)';
   }
 }
