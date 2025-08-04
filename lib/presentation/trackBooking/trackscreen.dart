@@ -1,9 +1,13 @@
-// lib/presentation/tracking/enhanced_tracking_screen.dart
+// lib/presentation/trackBooking/trackscreen.dart
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:google_fonts/google_fonts.dart';
-import '../../../../features/booking/data/booking_Repository.dart';
+import '../../features/booking/showBooking/data/booking_display_repository.dart';
+import '../../features/booking/showBooking/logic/booking_display_Bloc.dart';
+import '../../features/booking/showBooking/logic/booking_display_event.dart';
+import '../../features/booking/showBooking/logic/booking_display_state.dart';
 
 class EnhancedTrackingScreen extends StatefulWidget {
   const EnhancedTrackingScreen({super.key});
@@ -15,57 +19,39 @@ class EnhancedTrackingScreen extends StatefulWidget {
 class _EnhancedTrackingScreenState extends State<EnhancedTrackingScreen>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
-  late BookingRepository _bookingRepository;
-  bool _isLoading = true;
-  List<Map<String, dynamic>> _allBookings = [];
-  List<Map<String, dynamic>> _activeBookings = [];
-  List<Map<String, dynamic>> _upcomingBookings = [];
-  List<Map<String, dynamic>> _completedBookings = [];
+  late BookingDisplayBloc _bookingBloc;
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
-    _bookingRepository = BookingRepository(
-      auth: FirebaseAuth.instance,
-      firestore: FirebaseFirestore.instance,
+    _bookingBloc = BookingDisplayBloc(
+      bookingDisplayRepository: BookingDisplayRepository(
+        auth: FirebaseAuth.instance,
+        firestore: FirebaseFirestore.instance,
+      ),
     );
-    _loadBookings();
+    _bookingBloc.add(LoadBookings());
   }
 
-  Future<void> _loadBookings() async {
-    setState(() {
-      _isLoading = true;
-    });
-
-    try {
-      final bookings = await _bookingRepository.getUserBookings();
-      _categorizeBookings(bookings);
-    } catch (e) {
-      print("Error loading bookings: $e");
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Error loading bookings: $e")),
-      );
-    } finally {
-      setState(() {
-        _isLoading = false;
-      });
-    }
+  @override
+  void dispose() {
+    _tabController.dispose();
+    _bookingBloc.close();
+    super.dispose();
   }
 
-  void _categorizeBookings(List<Map<String, dynamic>> bookings) {
+  void _refreshBookings() {
+    _bookingBloc.add(RefreshBookings());
+  }
+
+  List<Map<String, dynamic>> _categorizeBookings(
+      List<Map<String, dynamic>> bookings, String category) {
     final now = DateTime.now();
-    final active = <Map<String, dynamic>>[];
-    final upcoming = <Map<String, dynamic>>[];
-    final completed = <Map<String, dynamic>>[];
 
-    for (final booking in bookings) {
-      final status = booking['status'] ?? 'pending';
+    return bookings.where((booking) {
+      final status = (booking['status'] ?? 'pending').toString().toLowerCase();
       final selectedDateString = booking['selectedDate'] as String?;
-
-      // Add cleaner info and estimated duration
-      booking['cleaner'] = _generateCleanerInfo();
-      booking['estimatedDuration'] = _getEstimatedDuration(booking['cleaningType']);
 
       DateTime? bookingDate;
       if (selectedDateString != null) {
@@ -76,34 +62,25 @@ class _EnhancedTrackingScreenState extends State<EnhancedTrackingScreen>
         }
       }
 
-      switch (status.toLowerCase()) {
-        case 'confirmed':
-        case 'in_progress':
-        case 'on_way':
-          active.add(booking);
-          break;
-        case 'completed':
-        case 'cancelled':
-          completed.add(booking);
-          break;
-        case 'pending':
-        case 'rescheduled':
-        default:
-          if (bookingDate != null && bookingDate.isAfter(now.subtract(const Duration(days: 1)))) {
-            upcoming.add(booking);
-          } else {
-            completed.add(booking);
-          }
-          break;
-      }
-    }
+      booking['cleaner'] = _generateCleanerInfo();
+      booking['estimatedDuration'] = _getEstimatedDuration(booking['cleaningType']);
 
-    setState(() {
-      _allBookings = bookings;
-      _activeBookings = active;
-      _upcomingBookings = upcoming;
-      _completedBookings = completed;
-    });
+      switch (category) {
+        case 'active':
+          return ['in_progress', 'on_way', 'started'].contains(status);
+        case 'upcoming':
+          if (['confirmed', 'pending', 'rescheduled', 'paid'].contains(status)) {
+            return bookingDate != null &&
+                bookingDate.isAfter(now.subtract(const Duration(hours: 2)));
+          }
+          return false;
+        case 'history':
+          return ['completed', 'cancelled'].contains(status) ||
+              (bookingDate != null && bookingDate.isBefore(now.subtract(const Duration(hours: 2))));
+        default:
+          return false;
+      }
+    }).toList();
   }
 
   Map<String, dynamic> _generateCleanerInfo() {
@@ -130,80 +107,400 @@ class _EnhancedTrackingScreenState extends State<EnhancedTrackingScreen>
         'experience': '7 years',
       },
     ];
-
     return cleaners[DateTime.now().millisecond % cleaners.length];
   }
 
   int _getEstimatedDuration(String? cleaningType) {
     switch (cleaningType?.toLowerCase()) {
       case 'standard':
-        return 120; // 2 hours
+        return 120;
       case 'deep cleaning':
-        return 240; // 4 hours
+        return 240;
       case 'premium cleaning':
-        return 300; // 5 hours
+        return 300;
       case 'move-in/out':
-        return 480; // 8 hours
+        return 480;
       case 'spring clean':
-        return 360; // 6 hours
+        return 360;
       default:
         return 120;
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.grey.shade50,
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        elevation: 0,
+  bool _canStartBooking(Map<String, dynamic> booking) {
+    final selectedDateString = booking['selectedDate'] as String?;
+    if (selectedDateString == null) return false;
+
+    try {
+      final bookingDate = DateTime.parse(selectedDateString);
+      final today = DateTime.now();
+
+      return bookingDate.year == today.year &&
+          bookingDate.month == today.month &&
+          bookingDate.day == today.day;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  String _getBookingDateString(Map<String, dynamic> booking) {
+    final selectedDateString = booking['selectedDate'] as String?;
+    if (selectedDateString == null) return "the scheduled date";
+
+    try {
+      final bookingDate = DateTime.parse(selectedDateString);
+      return _formatDate(bookingDate);
+    } catch (e) {
+      return "the scheduled date";
+    }
+  }
+
+  void _startBooking(Map<String, dynamic> booking) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
         title: Text(
-          "Track Bookings",
-          style: GoogleFonts.manrope(
-            fontWeight: FontWeight.bold,
-            color: Colors.black,
-            fontSize: 20,
-          ),
+          "Start Cleaning Service",
+          style: GoogleFonts.manrope(fontWeight: FontWeight.bold),
         ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh, color: Colors.black),
-            onPressed: _loadBookings,
-          ),
-        ],
-        bottom: TabBar(
-          controller: _tabController,
-          labelColor: const Color(0xFF1CABE3),
-          unselectedLabelColor: Colors.grey.shade600,
-          indicatorColor: const Color(0xFF1CABE3),
-          labelStyle: GoogleFonts.manrope(fontWeight: FontWeight.w600),
-          tabs: [
-            Tab(
-              text: "Active${_activeBookings.isNotEmpty ? ' (${_activeBookings.length})' : ''}",
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1CABE3).withOpacity(0.1),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.play_arrow,
+                color: Color(0xFF1CABE3),
+                size: 32,
+              ),
             ),
-            Tab(
-              text: "Upcoming${_upcomingBookings.isNotEmpty ? ' (${_upcomingBookings.length})' : ''}",
+            const SizedBox(height: 16),
+            Text(
+              "Are you ready to start your ${booking['cleaningType']} service?",
+              textAlign: TextAlign.center,
+              style: GoogleFonts.manrope(),
             ),
-            Tab(
-              text: "History${_completedBookings.isNotEmpty ? ' (${_completedBookings.length})' : ''}",
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.green.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.info_outline,
+                    color: Colors.green,
+                    size: 16,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      "This will mark your service as active and in progress.",
+                      style: GoogleFonts.manrope(
+                        fontSize: 12,
+                        color: Colors.green.shade700,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ],
         ),
-      ),
-      body: _isLoading
-          ? const Center(
-        child: CircularProgressIndicator(color: Color(0xFF1CABE3)),
-      )
-          : _allBookings.isEmpty
-          ? _buildEmptyState()
-          : TabBarView(
-        controller: _tabController,
-        children: [
-          _buildActiveBookingsTab(),
-          _buildUpcomingBookingsTab(),
-          _buildHistoryTab(),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(
+              "Not Yet",
+              style: GoogleFonts.manrope(color: Colors.grey.shade600),
+            ),
+          ),
+          ElevatedButton.icon(
+            onPressed: () {
+              Navigator.pop(context);
+              _updateBookingStatus(booking, 'in_progress');
+            },
+            icon: const Icon(Icons.play_arrow, size: 16),
+            label: Text(
+              "Start Service",
+              style: GoogleFonts.manrope(color: Colors.white),
+            ),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF1CABE3),
+            ),
+          ),
         ],
+      ),
+    );
+  }
+
+  void _updateBookingStatus(Map<String, dynamic> booking, String newStatus) {
+    setState(() {
+      booking['status'] = newStatus;
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            Icon(
+              newStatus == 'in_progress' ? Icons.play_arrow : Icons.check_circle,
+              color: Colors.white,
+            ),
+            const SizedBox(width: 8),
+            Text(
+              newStatus == 'in_progress'
+                  ? "Service started successfully!"
+                  : "Service completed successfully!",
+            ),
+          ],
+        ),
+        backgroundColor: Colors.green,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      ),
+    );
+
+    _refreshBookings();
+  }
+
+  void _showCloseOrderDialog(Map<String, dynamic> booking) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(
+          "Complete Service",
+          style: GoogleFonts.manrope(fontWeight: FontWeight.bold),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.green.withOpacity(0.1),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.check_circle,
+                color: Colors.green,
+                size: 32,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              "Is your ${booking['cleaningType']} service complete?",
+              textAlign: TextAlign.center,
+              style: GoogleFonts.manrope(),
+            ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.blue.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.info_outline,
+                    color: Colors.blue,
+                    size: 16,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      "This will mark the service as completed and move it to your history.",
+                      style: GoogleFonts.manrope(
+                        fontSize: 12,
+                        color: Colors.blue.shade700,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(
+              "Not Yet",
+              style: GoogleFonts.manrope(color: Colors.grey.shade600),
+            ),
+          ),
+          ElevatedButton.icon(
+            onPressed: () {
+              Navigator.pop(context);
+              _updateBookingStatus(booking, 'completed');
+            },
+            icon: const Icon(Icons.check_circle, size: 16),
+            label: Text(
+              "Complete Service",
+              style: GoogleFonts.manrope(color: Colors.white),
+            ),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.green,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return BlocProvider.value(
+      value: _bookingBloc,
+      child: Scaffold(
+        backgroundColor: Colors.grey.shade50,
+        appBar: AppBar(
+          backgroundColor: Colors.white,
+          elevation: 0,
+          title: Text(
+            "Track Bookings",
+            style: GoogleFonts.manrope(
+              fontWeight: FontWeight.bold,
+              color: Colors.black,
+              fontSize: 20,
+            ),
+          ),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.refresh, color: Colors.black),
+              onPressed: _refreshBookings,
+            ),
+          ],
+          bottom: PreferredSize(
+            preferredSize: const Size.fromHeight(50),
+            child: BlocBuilder<BookingDisplayBloc, BookingDisplayState>(
+              builder: (context, state) {
+                if (state is BookingDisplayLoaded) {
+                  final activeBookings = _categorizeBookings(state.bookings, 'active');
+                  final upcomingBookings = _categorizeBookings(state.bookings, 'upcoming');
+                  final historyBookings = _categorizeBookings(state.bookings, 'history');
+
+                  return TabBar(
+                    controller: _tabController,
+                    labelColor: const Color(0xFF1CABE3),
+                    unselectedLabelColor: Colors.grey.shade600,
+                    indicatorColor: const Color(0xFF1CABE3),
+                    labelStyle: GoogleFonts.manrope(fontWeight: FontWeight.w600),
+                    tabs: [
+                      Tab(
+                        text: "Active${activeBookings.isNotEmpty ? ' (${activeBookings.length})' : ''}",
+                      ),
+                      Tab(
+                        text: "Upcoming${upcomingBookings.isNotEmpty ? ' (${upcomingBookings.length})' : ''}",
+                      ),
+                      Tab(
+                        text: "History${historyBookings.isNotEmpty ? ' (${historyBookings.length})' : ''}",
+                      ),
+                    ],
+                  );
+                }
+                return TabBar(
+                  controller: _tabController,
+                  labelColor: const Color(0xFF1CABE3),
+                  unselectedLabelColor: Colors.grey.shade600,
+                  indicatorColor: const Color(0xFF1CABE3),
+                  labelStyle: GoogleFonts.manrope(fontWeight: FontWeight.w600),
+                  tabs: const [
+                    Tab(text: "Active"),
+                    Tab(text: "Upcoming"),
+                    Tab(text: "History"),
+                  ],
+                );
+              },
+            ),
+          ),
+        ),
+        body: BlocBuilder<BookingDisplayBloc, BookingDisplayState>(
+          builder: (context, state) {
+            if (state is BookingDisplayLoading) {
+              return const Center(
+                child: CircularProgressIndicator(color: Color(0xFF1CABE3)),
+              );
+            } else if (state is BookingDisplayError) {
+              return _buildErrorState(state.error);
+            } else if (state is BookingDisplayLoaded) {
+              if (state.bookings.isEmpty) {
+                return _buildEmptyState();
+              }
+
+              final activeBookings = _categorizeBookings(state.bookings, 'active');
+              final upcomingBookings = _categorizeBookings(state.bookings, 'upcoming');
+              final historyBookings = _categorizeBookings(state.bookings, 'history');
+
+              return TabBarView(
+                controller: _tabController,
+                children: [
+                  _buildActiveBookingsTab(activeBookings),
+                  _buildUpcomingBookingsTab(upcomingBookings),
+                  _buildHistoryTab(historyBookings),
+                ],
+              );
+            }
+            return const SizedBox.shrink();
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildErrorState(String error) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32.0),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.error_outline,
+              size: 80,
+              color: Colors.red.shade400,
+            ),
+            const SizedBox(height: 24),
+            Text(
+              "Error Loading Bookings",
+              style: GoogleFonts.manrope(
+                fontSize: 24,
+                fontWeight: FontWeight.bold,
+                color: Colors.red.shade600,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              error,
+              textAlign: TextAlign.center,
+              style: GoogleFonts.manrope(
+                color: Colors.grey.shade600,
+                fontSize: 16,
+              ),
+            ),
+            const SizedBox(height: 32),
+            ElevatedButton.icon(
+              onPressed: _refreshBookings,
+              icon: const Icon(Icons.refresh),
+              label: const Text("Try Again"),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF1CABE3),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -241,11 +538,11 @@ class _EnhancedTrackingScreenState extends State<EnhancedTrackingScreen>
             const SizedBox(height: 32),
             ElevatedButton(
               onPressed: () {
-                // Navigate to booking screen
                 Navigator.pop(context);
               },
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF1CABE3),
+                foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
@@ -254,7 +551,6 @@ class _EnhancedTrackingScreenState extends State<EnhancedTrackingScreen>
               child: Text(
                 "Book Now",
                 style: GoogleFonts.manrope(
-                  color: Colors.white,
                   fontWeight: FontWeight.bold,
                   fontSize: 16,
                 ),
@@ -266,29 +562,29 @@ class _EnhancedTrackingScreenState extends State<EnhancedTrackingScreen>
     );
   }
 
-  Widget _buildActiveBookingsTab() {
-    if (_activeBookings.isEmpty) {
+  Widget _buildActiveBookingsTab(List<Map<String, dynamic>> activeBookings) {
+    if (activeBookings.isEmpty) {
       return _buildNoActiveBookings();
     }
 
     return RefreshIndicator(
-      onRefresh: _loadBookings,
+      onRefresh: () async => _refreshBookings(),
       color: const Color(0xFF1CABE3),
       child: ListView.builder(
         padding: const EdgeInsets.all(16),
-        itemCount: _activeBookings.length,
+        itemCount: activeBookings.length,
         itemBuilder: (context, index) {
           return Padding(
             padding: const EdgeInsets.only(bottom: 16),
-            child: _buildActiveBookingCard(_activeBookings[index]),
+            child: _buildActiveBookingCard(activeBookings[index]),
           );
         },
       ),
     );
   }
 
-  Widget _buildUpcomingBookingsTab() {
-    if (_upcomingBookings.isEmpty) {
+  Widget _buildUpcomingBookingsTab(List<Map<String, dynamic>> upcomingBookings) {
+    if (upcomingBookings.isEmpty) {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(32),
@@ -312,23 +608,23 @@ class _EnhancedTrackingScreenState extends State<EnhancedTrackingScreen>
     }
 
     return RefreshIndicator(
-      onRefresh: _loadBookings,
+      onRefresh: () async => _refreshBookings(),
       color: const Color(0xFF1CABE3),
       child: ListView.builder(
         padding: const EdgeInsets.all(16),
-        itemCount: _upcomingBookings.length,
+        itemCount: upcomingBookings.length,
         itemBuilder: (context, index) {
           return Padding(
             padding: const EdgeInsets.only(bottom: 16),
-            child: _buildUpcomingBookingCard(_upcomingBookings[index]),
+            child: _buildUpcomingBookingCard(upcomingBookings[index]),
           );
         },
       ),
     );
   }
 
-  Widget _buildHistoryTab() {
-    if (_completedBookings.isEmpty) {
+  Widget _buildHistoryTab(List<Map<String, dynamic>> historyBookings) {
+    if (historyBookings.isEmpty) {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(32),
@@ -352,15 +648,15 @@ class _EnhancedTrackingScreenState extends State<EnhancedTrackingScreen>
     }
 
     return RefreshIndicator(
-      onRefresh: _loadBookings,
+      onRefresh: () async => _refreshBookings(),
       color: const Color(0xFF1CABE3),
       child: ListView.builder(
         padding: const EdgeInsets.all(16),
-        itemCount: _completedBookings.length,
+        itemCount: historyBookings.length,
         itemBuilder: (context, index) {
           return Padding(
             padding: const EdgeInsets.only(bottom: 16),
-            child: _buildHistoryBookingCard(_completedBookings[index]),
+            child: _buildHistoryBookingCard(historyBookings[index]),
           );
         },
       ),
@@ -444,7 +740,6 @@ class _EnhancedTrackingScreenState extends State<EnhancedTrackingScreen>
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Status header with animation
             Row(
               children: [
                 Container(
@@ -501,10 +796,7 @@ class _EnhancedTrackingScreenState extends State<EnhancedTrackingScreen>
                 ),
               ],
             ),
-
             const SizedBox(height: 20),
-
-            // Service details
             Text(
               cleaningType,
               style: GoogleFonts.manrope(
@@ -520,10 +812,7 @@ class _EnhancedTrackingScreenState extends State<EnhancedTrackingScreen>
                 fontSize: 14,
               ),
             ),
-
             const SizedBox(height: 20),
-
-            // Progress bar
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -536,7 +825,7 @@ class _EnhancedTrackingScreenState extends State<EnhancedTrackingScreen>
                 ),
                 const SizedBox(height: 8),
                 LinearProgressIndicator(
-                  value: 0.6, // This would be calculated based on actual progress
+                  value: 0.6,
                   backgroundColor: Colors.grey.shade200,
                   valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF1CABE3)),
                   minHeight: 6,
@@ -551,10 +840,7 @@ class _EnhancedTrackingScreenState extends State<EnhancedTrackingScreen>
                 ),
               ],
             ),
-
             const SizedBox(height: 20),
-
-            // Cleaner info
             Row(
               children: [
                 CircleAvatar(
@@ -595,7 +881,6 @@ class _EnhancedTrackingScreenState extends State<EnhancedTrackingScreen>
                 ),
                 IconButton(
                   onPressed: () {
-                    // Call cleaner functionality
                     _showCallCleanerDialog(cleaner);
                   },
                   icon: const Icon(Icons.phone),
@@ -606,10 +891,7 @@ class _EnhancedTrackingScreenState extends State<EnhancedTrackingScreen>
                 ),
               ],
             ),
-
             const SizedBox(height: 20),
-
-            // Action buttons
             Row(
               children: [
                 Expanded(
@@ -635,19 +917,65 @@ class _EnhancedTrackingScreenState extends State<EnhancedTrackingScreen>
                 Expanded(
                   child: ElevatedButton.icon(
                     onPressed: () {
-                      _showChatWithCleaner(cleaner);
+                      _showCloseOrderDialog(booking);
                     },
-                    icon: const Icon(Icons.chat, size: 18),
+                    icon: const Icon(Icons.check_circle, size: 18),
                     label: Text(
-                      "Chat",
+                      "Close Order",
                       style: GoogleFonts.manrope(fontWeight: FontWeight.w600),
                     ),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF1CABE3),
+                      backgroundColor: Colors.green,
                       foregroundColor: Colors.white,
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(8),
                       ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: TextButton.icon(
+                    onPressed: () {
+                      _showChatWithCleaner(cleaner);
+                    },
+                    icon: const Icon(Icons.chat, size: 16),
+                    label: Text(
+                      "Chat with Cleaner",
+                      style: GoogleFonts.manrope(
+                        fontWeight: FontWeight.w500,
+                        fontSize: 14,
+                      ),
+                    ),
+                    style: TextButton.styleFrom(
+                      foregroundColor: const Color(0xFF1CABE3),
+                    ),
+                  ),
+                ),
+                Container(
+                  height: 24,
+                  width: 1,
+                  color: Colors.grey.shade300,
+                ),
+                Expanded(
+                  child: TextButton.icon(
+                    onPressed: () {
+                      _showCallCleanerDialog(cleaner);
+                    },
+                    icon: const Icon(Icons.phone, size: 16),
+                    label: Text(
+                      "Call Cleaner",
+                      style: GoogleFonts.manrope(
+                        fontWeight: FontWeight.w500,
+                        fontSize: 14,
+                      ),
+                    ),
+                    style: TextButton.styleFrom(
+                      foregroundColor: const Color(0xFF1CABE3),
                     ),
                   ),
                 ),
@@ -666,6 +994,7 @@ class _EnhancedTrackingScreenState extends State<EnhancedTrackingScreen>
     final propertyType = booking['propertyType'] ?? 'Property';
     final bedrooms = booking['bedrooms'] ?? 1;
     final bathrooms = booking['bathrooms'] ?? 1;
+    final status = (booking['status'] ?? 'pending').toString().toLowerCase();
 
     DateTime? bookingDateTime;
     if (selectedDate != null) {
@@ -675,6 +1004,10 @@ class _EnhancedTrackingScreenState extends State<EnhancedTrackingScreen>
         print("Error parsing date: $selectedDate");
       }
     }
+
+    final isConfirmed = ['confirmed', 'paid'].contains(status);
+    final statusColor = isConfirmed ? Colors.green : Colors.orange;
+    final statusText = isConfirmed ? 'Confirmed' : 'Pending';
 
     return Container(
       decoration: BoxDecoration(
@@ -693,29 +1026,53 @@ class _EnhancedTrackingScreenState extends State<EnhancedTrackingScreen>
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Header
             Row(
               children: [
                 Container(
                   padding: const EdgeInsets.all(8),
                   decoration: BoxDecoration(
-                    color: Colors.orange.withOpacity(0.1),
+                    color: statusColor.withOpacity(0.1),
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Icon(
-                    Icons.schedule,
-                    color: Colors.orange.shade700,
+                    isConfirmed ? Icons.check_circle : Icons.schedule,
+                    color: statusColor,
                     size: 20,
                   ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
-                  child: Text(
-                    cleaningType,
-                    style: GoogleFonts.manrope(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                    ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        cleaningType,
+                        style: GoogleFonts.manrope(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: statusColor.withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: statusColor.withOpacity(0.3)),
+                            ),
+                            child: Text(
+                              statusText.toUpperCase(),
+                              style: GoogleFonts.manrope(
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                                color: statusColor,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
                 ),
                 PopupMenuButton<String>(
@@ -754,10 +1111,7 @@ class _EnhancedTrackingScreenState extends State<EnhancedTrackingScreen>
                 ),
               ],
             ),
-
             const SizedBox(height: 16),
-
-            // Date and time
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
@@ -784,10 +1138,7 @@ class _EnhancedTrackingScreenState extends State<EnhancedTrackingScreen>
                 ],
               ),
             ),
-
             const SizedBox(height: 12),
-
-            // Property details
             Text(
               "$propertyType • $bedrooms bed • $bathrooms bath",
               style: GoogleFonts.manrope(
@@ -795,57 +1146,132 @@ class _EnhancedTrackingScreenState extends State<EnhancedTrackingScreen>
                 fontSize: 14,
               ),
             ),
-
-            // Add-ons if any
             if (booking['addOns'] != null) ...[
               const SizedBox(height: 12),
               _buildAddOns(booking['addOns']),
             ],
-
             const SizedBox(height: 16),
-
-            // Action buttons
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: () => _showRescheduleDialog(booking),
-                    style: OutlinedButton.styleFrom(
-                      side: BorderSide(color: Colors.grey.shade300),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
+            if (isConfirmed) ...[
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () => _showRescheduleDialog(booking),
+                      icon: const Icon(Icons.schedule, size: 16),
+                      label: Text(
+                        "Reschedule",
+                        style: GoogleFonts.manrope(
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
-                    ),
-                    child: Text(
-                      "Reschedule",
-                      style: GoogleFonts.manrope(
-                        color: Colors.grey.shade700,
-                        fontWeight: FontWeight.w600,
+                      style: OutlinedButton.styleFrom(
+                        side: BorderSide(color: Colors.grey.shade300),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
                       ),
                     ),
                   ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: () => _confirmBooking(booking),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF1CABE3),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: _canStartBooking(booking)
+                          ? () => _startBooking(booking)
+                          : null,
+                      icon: Icon(
+                        _canStartBooking(booking) ? Icons.play_arrow : Icons.schedule,
+                        size: 16,
+                      ),
+                      label: Text(
+                        _canStartBooking(booking) ? "Start Order" : "Not Today",
+                        style: GoogleFonts.manrope(
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: _canStartBooking(booking)
+                            ? const Color(0xFF1CABE3)
+                            : Colors.grey.shade400,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
                       ),
                     ),
-                    child: Text(
-                      "Confirm",
-                      style: GoogleFonts.manrope(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w600,
+                  ),
+                ],
+              ),
+              if (!_canStartBooking(booking)) ...[
+                const SizedBox(height: 8),
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.info_outline,
+                        size: 16,
+                        color: Colors.blue.shade700,
                       ),
-                    ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          "You can start this order on ${_getBookingDateString(booking)}",
+                          style: GoogleFonts.manrope(
+                            fontSize: 12,
+                            color: Colors.blue.shade700,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ],
-            ),
+            ] else ...[
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => _showCancelDialog(booking),
+                      style: OutlinedButton.styleFrom(
+                        side: const BorderSide(color: Colors.red),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
+                      child: Text(
+                        "Cancel",
+                        style: GoogleFonts.manrope(
+                          color: Colors.red,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: () => _completePayment(booking),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.green,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
+                      child: Text(
+                        "Complete Payment",
+                        style: GoogleFonts.manrope(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ],
         ),
       ),
@@ -985,11 +1411,44 @@ class _EnhancedTrackingScreenState extends State<EnhancedTrackingScreen>
   }
 
   void _confirmBooking(Map<String, dynamic> booking) {
-    // Implementation for confirming booking
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text("Booking confirmed!")),
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(
+          "Confirm Booking",
+          style: GoogleFonts.manrope(fontWeight: FontWeight.bold),
+        ),
+        content: Text(
+          "Confirm your booking for ${booking['cleaningType']}?",
+          style: GoogleFonts.manrope(),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(
+              "Cancel",
+              style: GoogleFonts.manrope(color: Colors.grey.shade600),
+            ),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text("Booking confirmed!")),
+              );
+              _refreshBookings();
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF1CABE3),
+            ),
+            child: Text(
+              "Confirm",
+              style: GoogleFonts.manrope(color: Colors.white),
+            ),
+          ),
+        ],
+      ),
     );
-    _loadBookings();
   }
 
   void _showCancelDialog(Map<String, dynamic> booking) {
@@ -1001,7 +1460,7 @@ class _EnhancedTrackingScreenState extends State<EnhancedTrackingScreen>
           style: GoogleFonts.manrope(fontWeight: FontWeight.bold),
         ),
         content: Text(
-          "Are you sure you want to cancel this booking?",
+          "Are you sure you want to cancel this booking? This action cannot be undone.",
           style: GoogleFonts.manrope(),
         ),
         actions: [
@@ -1016,9 +1475,12 @@ class _EnhancedTrackingScreenState extends State<EnhancedTrackingScreen>
             onPressed: () {
               Navigator.pop(context);
               ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text("Booking cancelled")),
+                const SnackBar(
+                  content: Text("Booking cancelled"),
+                  backgroundColor: Colors.red,
+                ),
               );
-              _loadBookings();
+              _refreshBookings();
             },
             style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
             child: Text(
@@ -1039,9 +1501,42 @@ class _EnhancedTrackingScreenState extends State<EnhancedTrackingScreen>
           "Reschedule Booking",
           style: GoogleFonts.manrope(fontWeight: FontWeight.bold),
         ),
-        content: Text(
-          "Contact our support team to reschedule your booking.",
-          style: GoogleFonts.manrope(),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              "To reschedule your booking, please contact our support team.",
+              style: GoogleFonts.manrope(),
+            ),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1CABE3).withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.info_outline,
+                    color: Color(0xFF1CABE3),
+                    size: 20,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      "Free rescheduling up to 24 hours before service",
+                      style: GoogleFonts.manrope(
+                        fontSize: 12,
+                        color: const Color(0xFF1CABE3),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
         actions: [
           TextButton(
@@ -1079,9 +1574,45 @@ class _EnhancedTrackingScreenState extends State<EnhancedTrackingScreen>
           "Call ${cleaner['name']}",
           style: GoogleFonts.manrope(fontWeight: FontWeight.bold),
         ),
-        content: Text(
-          "Call ${cleaner['phone']}?",
-          style: GoogleFonts.manrope(),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CircleAvatar(
+              radius: 40,
+              backgroundImage: AssetImage(cleaner['avatar']),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              cleaner['name'],
+              style: GoogleFonts.manrope(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  Icons.star,
+                  size: 16,
+                  color: Colors.amber.shade600,
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  "${cleaner['rating']} rating",
+                  style: GoogleFonts.manrope(
+                    color: Colors.grey.shade600,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Text(
+              "Call ${cleaner['phone']}?",
+              style: GoogleFonts.manrope(),
+            ),
+          ],
         ),
         actions: [
           TextButton(
@@ -1091,19 +1622,20 @@ class _EnhancedTrackingScreenState extends State<EnhancedTrackingScreen>
               style: GoogleFonts.manrope(color: Colors.grey.shade600),
             ),
           ),
-          ElevatedButton(
+          ElevatedButton.icon(
             onPressed: () {
               Navigator.pop(context);
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(content: Text("Calling ${cleaner['phone']}...")),
               );
             },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF1CABE3),
-            ),
-            child: Text(
+            icon: const Icon(Icons.phone, size: 18),
+            label: Text(
               "Call",
               style: GoogleFonts.manrope(color: Colors.white),
+            ),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF1CABE3),
             ),
           ),
         ],
@@ -1148,6 +1680,14 @@ class _EnhancedTrackingScreenState extends State<EnhancedTrackingScreen>
                 style: GoogleFonts.manrope(
                   fontSize: 20,
                   fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                booking['cleaningType'] ?? 'Cleaning Service',
+                style: GoogleFonts.manrope(
+                  fontSize: 16,
+                  color: Colors.grey.shade600,
                 ),
               ),
               const SizedBox(height: 20),
@@ -1238,37 +1778,171 @@ class _EnhancedTrackingScreenState extends State<EnhancedTrackingScreen>
   }
 
   void _showChatWithCleaner(Map<String, dynamic> cleaner) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text("Opening chat with ${cleaner['name']}...")),
-    );
-  }
-
-  void _showRateServiceDialog(Map<String, dynamic> booking) {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
         title: Text(
-          "Rate Your Service",
+          "Chat with ${cleaner['name']}",
+          style: GoogleFonts.manrope(fontWeight: FontWeight.bold),
+        ),
+        content: Text(
+          "Chat feature coming soon! For now, you can call your cleaner directly.",
+          style: GoogleFonts.manrope(),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(
+              "Close",
+              style: GoogleFonts.manrope(color: Colors.grey.shade600),
+            ),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _showCallCleanerDialog(cleaner);
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF1CABE3),
+            ),
+            child: Text(
+              "Call Instead",
+              style: GoogleFonts.manrope(color: Colors.white),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showRateServiceDialog(Map<String, dynamic> booking) {
+    int selectedRating = 0;
+
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setState) => AlertDialog(
+          title: Text(
+            "Rate Your Service",
+            style: GoogleFonts.manrope(fontWeight: FontWeight.bold),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                "How was your ${booking['cleaningType']} service?",
+                style: GoogleFonts.manrope(),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 20),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: List.generate(5, (index) => IconButton(
+                  onPressed: () {
+                    setState(() {
+                      selectedRating = index + 1;
+                    });
+                  },
+                  icon: Icon(
+                    Icons.star,
+                    color: index < selectedRating
+                        ? Colors.amber.shade600
+                        : Colors.grey.shade300,
+                    size: 32,
+                  ),
+                )),
+              ),
+              const SizedBox(height: 16),
+              if (selectedRating > 0)
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.green.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    "Thanks for rating: $selectedRating star${selectedRating > 1 ? 's' : ''}!",
+                    style: GoogleFonts.manrope(
+                      color: Colors.green.shade700,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text(
+                "Later",
+                style: GoogleFonts.manrope(color: Colors.grey.shade600),
+              ),
+            ),
+            ElevatedButton(
+              onPressed: selectedRating > 0 ? () {
+                Navigator.pop(context);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text("Thank you for your $selectedRating-star rating!"),
+                    backgroundColor: Colors.green,
+                  ),
+                );
+              } : null,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF1CABE3),
+              ),
+              child: Text(
+                "Submit",
+                style: GoogleFonts.manrope(color: Colors.white),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _completePayment(Map<String, dynamic> booking) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(
+          "Complete Payment",
           style: GoogleFonts.manrope(fontWeight: FontWeight.bold),
         ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(
-              "How was your cleaning service?",
+              "Your booking is pending payment completion.",
               style: GoogleFonts.manrope(),
             ),
             const SizedBox(height: 16),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: List.generate(5, (index) => IconButton(
-                onPressed: () {},
-                icon: Icon(
-                  Icons.star,
-                  color: Colors.amber.shade600,
-                  size: 32,
-                ),
-              )),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.orange.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.warning_amber,
+                    color: Colors.orange,
+                    size: 20,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      "Please complete payment to confirm your booking.",
+                      style: GoogleFonts.manrope(
+                        fontSize: 12,
+                        color: Colors.orange.shade700,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ],
         ),
@@ -1284,25 +1958,19 @@ class _EnhancedTrackingScreenState extends State<EnhancedTrackingScreen>
             onPressed: () {
               Navigator.pop(context);
               ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text("Thank you for your rating!")),
+                const SnackBar(content: Text("Redirecting to payment...")),
               );
             },
             style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF1CABE3),
+              backgroundColor: Colors.green,
             ),
             child: Text(
-              "Submit",
+              "Pay Now",
               style: GoogleFonts.manrope(color: Colors.white),
             ),
           ),
         ],
       ),
     );
-  }
-
-  @override
-  void dispose() {
-    _tabController.dispose();
-    super.dispose();
   }
 }
