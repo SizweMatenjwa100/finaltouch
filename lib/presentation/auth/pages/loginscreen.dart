@@ -1,3 +1,4 @@
+import 'package:finaltouch/features/location/logic/authGate.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -46,7 +47,7 @@ class _LoginScreenState extends State<LoginScreen> {
               );
             } else if (state is AuthSuccess) {
               Navigator.of(context).pop(); // Remove loading
-              Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const MainNavigation()));
+              Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const AuthGate()));
             } else if (state is AuthFailure) {
               Navigator.of(context).pop(); // Remove loading
               ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(state.error)));

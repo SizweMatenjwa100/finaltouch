@@ -1,4 +1,4 @@
-// lib/features/payment/data/payment_repository.dart
+// lib/features/payment/data/payment_repository.dart - COMPLETE FIXED VERSION
 import 'dart:convert';
 import 'dart:math';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -10,11 +10,11 @@ class PaymentRepository {
   final FirebaseAuth auth;
   final FirebaseFirestore firestore;
 
-  // PayFast credentials - Replace with your actual credentials
-  static const String merchantId = "10000100"; // Replace with your merchant ID
-  static const String merchantKey = "46f0cd694581a"; // Replace with your merchant key
-  static const String passphrase = ""; // Empty for sandbox, set for production
-  static const bool sandboxMode = true; // Set to false for production
+  // PayFast credentials - Use these exact sandbox credentials
+  static const String merchantId = "10000100";
+  static const String merchantKey = "46f0cd694581a";
+  static const String passphrase = "jt7NOE43FZPn";
+  static const bool sandboxMode = true;
 
   PaymentRepository({
     required this.auth,
@@ -37,7 +37,7 @@ class PaymentRepository {
       final paymentId = _generatePaymentId();
       final timestamp = DateTime.now();
 
-      // Create a shortened version of booking data for PayFast (under 255 chars)
+      // Create shortened booking data for PayFast (under 255 chars)
       final shortBookingData = {
         'type': bookingData['cleaningType'] ?? 'Standard',
         'property': bookingData['propertyType'] ?? 'House',
@@ -47,8 +47,8 @@ class PaymentRepository {
         'locationId': bookingData['locationId'] ?? '',
       };
 
-      // Prepare PayFast data
-      final paymentData = {
+      // PayFast parameters - EXACT order matters
+      final paymentData = <String, String>{
         'merchant_id': merchantId,
         'merchant_key': merchantKey,
         'return_url': _getReturnUrl(),
@@ -56,20 +56,21 @@ class PaymentRepository {
         'notify_url': _getNotifyUrl(),
         'name_first': _getFirstName(user),
         'name_last': _getLastName(user),
-        'email_address': user.email ?? '',
-        'cell_number': '', // Add if you collect phone numbers
+        'email_address': user.email ?? 'customer@example.com',
         'm_payment_id': paymentId,
         'amount': amount.toStringAsFixed(2),
         'item_name': _getItemName(bookingData),
         'item_description': _getItemDescription(bookingData),
-        'custom_str1': user.uid, // User ID for reference
-        'custom_str2': jsonEncode(shortBookingData), // Shortened booking data (under 255 chars)
-        'custom_str3': paymentId, // Payment reference
+        'custom_str1': user.uid,
+        'custom_str2': jsonEncode(shortBookingData),
+        'custom_str3': paymentId,
       };
+
+      // Remove empty values (PayFast requirement)
+      paymentData.removeWhere((key, value) => value.trim().isEmpty);
 
       // Ensure custom_str2 is under 255 characters
       if (paymentData['custom_str2']!.length > 255) {
-        // If still too long, use minimal data
         final minimalData = {
           'paymentId': paymentId,
           'userId': user.uid,
@@ -88,11 +89,11 @@ class PaymentRepository {
       // Generate PayFast URL
       final paymentUrl = _generatePaymentUrl(paymentData);
 
-      // Save payment record to Firestore (with full booking data)
+      // Save payment record to Firestore
       await _savePaymentRecord(
         paymentId: paymentId,
         userId: user.uid,
-        bookingData: bookingData, // Save full data to Firestore
+        bookingData: bookingData,
         amount: amount,
         currency: currency,
         paymentData: paymentData,
@@ -108,6 +109,86 @@ class PaymentRepository {
       print("❌ Error initializing payment: $e");
       rethrow;
     }
+  }
+
+  /// FIXED: Generate PayFast signature with correct parameter order and encoding
+  String _generateSignature(Map<String, String> data) {
+    // PayFast requires parameters in this EXACT order
+    final orderedKeys = [
+      'merchant_id',
+      'merchant_key',
+      'return_url',
+      'cancel_url',
+      'notify_url',
+      'name_first',
+      'name_last',
+      'email_address',
+      'cell_number',
+      'm_payment_id',
+      'amount',
+      'item_name',
+      'item_description',
+      'custom_str1',
+      'custom_str2',
+      'custom_str3',
+      'custom_str4',
+      'custom_str5',
+      'custom_int1',
+      'custom_int2',
+      'custom_int3',
+      'custom_int4',
+      'custom_int5',
+    ];
+
+    final pairs = <String>[];
+
+    // Build query string in PayFast's required order
+    for (final key in orderedKeys) {
+      if (data.containsKey(key)) {
+        final value = data[key]!.trim();
+        if (value.isNotEmpty) {
+          // URL encode the value, replace %20 with +
+          final encodedValue = Uri.encodeQueryComponent(value).replaceAll('%20', '+');
+          pairs.add('$key=$encodedValue');
+        }
+      }
+    }
+
+    String queryString = pairs.join('&');
+
+    // Add passphrase for sandbox (CRITICAL!)
+    if (sandboxMode && passphrase.isNotEmpty) {
+      queryString += '&passphrase=$passphrase';
+    }
+
+    print("🔐 Signature string: $queryString");
+
+    // Generate MD5 hash
+    final bytes = utf8.encode(queryString);
+    final digest = md5.convert(bytes);
+
+    final signature = digest.toString();
+    print("🔐 Generated signature: $signature");
+
+    return signature;
+  }
+
+  /// Generate PayFast payment URL
+  String _generatePaymentUrl(Map<String, String> data) {
+    final baseUrl = sandboxMode
+        ? 'https://sandbox.payfast.co.za/eng/process'
+        : 'https://www.payfast.co.za/eng/process';
+
+    // For the URL, we need to URL encode the values
+    final queryParams = data.entries
+        .map((e) => '${Uri.encodeQueryComponent(e.key)}=${Uri.encodeQueryComponent(e.value)}')
+        .join('&');
+
+    final fullUrl = '$baseUrl?$queryParams';
+    print("🌐 PayFast URL length: ${fullUrl.length}");
+    print("🌐 PayFast URL: ${fullUrl.substring(0, fullUrl.length > 200 ? 200 : fullUrl.length)}...");
+
+    return fullUrl;
   }
 
   /// Process successful payment and save booking
@@ -159,7 +240,7 @@ class PaymentRepository {
         'paymentStatus': 'paid',
         'totalAmount': paymentData['amount'],
         'currency': paymentData['currency'],
-        'status': 'confirmed', // Confirmed since payment is successful
+        'status': 'confirmed',
         'paidAt': FieldValue.serverTimestamp(),
       };
 
@@ -232,64 +313,6 @@ class PaymentRepository {
     return 'PAY_${timestamp}_$random';
   }
 
-  /// Generate PayFast signature
-  String _generateSignature(Map<String, dynamic> data) {
-    // Remove signature if it exists
-    final dataToSign = Map<String, dynamic>.from(data);
-    dataToSign.remove('signature');
-
-    // Sort keys alphabetically
-    final sortedKeys = dataToSign.keys.toList()..sort();
-    final pairs = <String>[];
-
-    // Build query string with proper encoding
-    for (final key in sortedKeys) {
-      final value = dataToSign[key].toString().trim();
-      if (value.isNotEmpty) {
-        // URL encode both key and value
-        final encodedKey = Uri.encodeQueryComponent(key);
-        final encodedValue = Uri.encodeQueryComponent(value);
-        pairs.add('$encodedKey=$encodedValue');
-      }
-    }
-
-    String queryString = pairs.join('&');
-
-    // Add passphrase for sandbox mode
-    if (sandboxMode && passphrase.isNotEmpty) {
-      queryString += '&passphrase=${Uri.encodeQueryComponent(passphrase)}';
-    }
-
-    print("🔐 Signature query string: $queryString");
-
-    // Generate MD5 hash
-    final bytes = utf8.encode(queryString);
-    final digest = md5.convert(bytes);
-
-    final signature = digest.toString();
-    print("🔐 Generated signature: $signature");
-
-    return signature;
-  }
-
-  /// Generate PayFast payment URL
-  String _generatePaymentUrl(Map<String, dynamic> data) {
-    final baseUrl = sandboxMode
-        ? 'https://sandbox.payfast.co.za/eng/process'
-        : 'https://www.payfast.co.za/eng/process';
-
-    // Build query parameters with proper encoding
-    final queryParams = data.entries
-        .map((e) => '${Uri.encodeQueryComponent(e.key)}=${Uri.encodeQueryComponent(e.value.toString())}')
-        .join('&');
-
-    final fullUrl = '$baseUrl?$queryParams';
-    print("🌐 PayFast URL length: ${fullUrl.length}");
-    print("🌐 PayFast URL: ${fullUrl.substring(0, fullUrl.length > 200 ? 200 : fullUrl.length)}...");
-
-    return fullUrl;
-  }
-
   /// Save payment record to Firestore
   Future<void> _savePaymentRecord({
     required String paymentId,
@@ -297,13 +320,13 @@ class PaymentRepository {
     required Map<String, dynamic> bookingData,
     required double amount,
     required String currency,
-    required Map<String, dynamic> paymentData,
+    required Map<String, String> paymentData,
     required DateTime timestamp,
   }) async {
     await firestore.collection('payments').doc(paymentId).set({
       'paymentId': paymentId,
       'userId': userId,
-      'bookingData': jsonEncode(bookingData), // Store full booking data in Firestore
+      'bookingData': jsonEncode(bookingData),
       'amount': amount,
       'currency': currency,
       'status': 'pending',

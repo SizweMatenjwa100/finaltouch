@@ -1,4 +1,4 @@
-// lib/presentation/payment/pages/payment_screen.dart - FINAL VERSION
+// lib/presentation/payment/pages/payment_screen.dart - FINAL FIXED VERSION
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -29,6 +29,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
   late PaymentBloc _paymentBloc;
   late PriceBreakdown _priceBreakdown;
   WebViewController? _webViewController;
+  String _currentPaymentId = ''; // Store the current payment ID
 
   @override
   void initState() {
@@ -64,7 +65,8 @@ class _PaymentScreenState extends State<PaymentScreen> {
           },
           onNavigationRequest: (NavigationRequest request) {
             print("🌐 Navigation request: ${request.url}");
-            _handlePaymentCallback(request.url, "");
+            // Use the stored payment ID
+            _handlePaymentCallback(request.url, _currentPaymentId);
             return NavigationDecision.navigate;
           },
         ),
@@ -178,7 +180,11 @@ class _PaymentScreenState extends State<PaymentScreen> {
         ),
         body: BlocListener<PaymentBloc, PaymentState>(
           listener: (context, state) {
-            if (state is PaymentSuccess) {
+            // Store the payment ID when it's ready
+            if (state is PaymentReady) {
+              _currentPaymentId = state.paymentId;
+              print("💾 Stored payment ID: $_currentPaymentId");
+            } else if (state is PaymentSuccess) {
               _showPaymentSuccessDialog(state.bookingId);
             } else if (state is PaymentFailed) {
               ScaffoldMessenger.of(context).showSnackBar(
@@ -604,6 +610,14 @@ class _PaymentScreenState extends State<PaymentScreen> {
   }
 
   void _handlePaymentCallback(String url, String paymentId) {
+    print("🌐 Handling payment callback: $url with paymentId: $paymentId");
+
+    // Ensure we have a valid paymentId
+    if (paymentId.isEmpty) {
+      print("⚠️ PaymentId is empty, cannot process callback");
+      return;
+    }
+
     // Handle PayFast callback URLs
     if (url.contains('payment_status=1') ||
         url.contains('/payment/success') ||
@@ -614,6 +628,8 @@ class _PaymentScreenState extends State<PaymentScreen> {
       final paymentToken = uri.queryParameters['pf_payment_id'] ??
           uri.queryParameters['payment_id'] ??
           'token_${DateTime.now().millisecondsSinceEpoch}';
+
+      print("✅ Payment successful, processing with paymentId: $paymentId");
 
       _paymentBloc.add(ProcessPaymentSuccess(
         paymentId: paymentId,
