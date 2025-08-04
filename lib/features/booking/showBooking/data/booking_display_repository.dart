@@ -1,3 +1,5 @@
+// lib/features/booking/showBooking/data/booking_display_repository.dart - FINAL FIX
+import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
@@ -13,71 +15,178 @@ class BookingDisplayRepository {
       throw Exception("User must be authenticated");
     }
 
-    try {
-      final locationId = await _getUserLocationId();
-      if (locationId == null) {
-        return []; // No location, no bookings
-      }
+    final allBookings = <Map<String, dynamic>>[];
 
-      final snapshot = await firestore
+    try {
+      print("🔍 DEBUG: Getting bookings for user: $uid");
+
+      // METHOD 1: Check regular bookings structure
+      print("📋 METHOD 1: Checking regular bookings...");
+      final locationsSnapshot = await firestore
           .collection('users')
           .doc(uid)
           .collection('locations')
-          .doc(locationId)
-          .collection('bookings')
-          .orderBy('timestamp', descending: true)
           .get();
 
-      final bookings = snapshot.docs.map((doc) {
-        final data = doc.data();
-        data['bookingId'] = doc.id;
-        return data;
-      }).toList();
+      print("📍 Found ${locationsSnapshot.docs.length} locations");
 
-      print("📋 Found ${bookings.length} bookings for user");
-      return bookings;
+      for (final locationDoc in locationsSnapshot.docs) {
+        print("📍 Checking location: ${locationDoc.id}");
+        final bookingsSnapshot = await firestore
+            .collection('users')
+            .doc(uid)
+            .collection('locations')
+            .doc(locationDoc.id)
+            .collection('bookings')
+            .get();
+
+        print("📋 Location ${locationDoc.id}: ${bookingsSnapshot.docs.length} bookings");
+
+        for (final bookingDoc in bookingsSnapshot.docs) {
+          final data = bookingDoc.data();
+          data['bookingId'] = bookingDoc.id;
+          data['source'] = 'regular';
+          allBookings.add(data);
+          print("   ✅ Added regular booking: ${bookingDoc.id}");
+        }
+      }
+
+      // METHOD 2: Check completed payments
+      print("\n💳 METHOD 2: Checking completed payments...");
+      final paymentsSnapshot = await firestore
+          .collection('payments')
+          .where('userId', isEqualTo: uid)
+          .get();
+
+      print("💳 Found ${paymentsSnapshot.docs.length} total payments");
+
+      for (final paymentDoc in paymentsSnapshot.docs) {
+        final paymentData = paymentDoc.data();
+        final status = paymentData['status'];
+
+        print("💳 Payment ${paymentDoc.id}: status = $status");
+
+        if (status == 'completed' && paymentData['bookingData'] != null) {
+          try {
+            final bookingData = Map<String, dynamic>.from(
+                jsonDecode(paymentData['bookingData']));
+
+            // Check if already exists
+            final existingBooking = allBookings.any((booking) =>
+            booking['paymentId'] == paymentDoc.id);
+
+            if (!existingBooking) {
+              bookingData.addAll({
+                'bookingId': paymentDoc.id,
+                'paymentId': paymentDoc.id,
+                'status': 'confirmed',
+                'paymentStatus': 'paid',
+                'totalAmount': paymentData['amount'],
+                'currency': paymentData['currency'] ?? 'ZAR',
+                'source': 'payment',
+                'userId': uid,
+              });
+
+              // Handle timestamp
+              if (paymentData['createdAt'] != null) {
+                bookingData['createdAt'] = paymentData['createdAt'];
+                bookingData['timestamp'] = paymentData['createdAt'];
+              }
+
+              allBookings.add(bookingData);
+              print("   ✅ Added payment booking: ${paymentDoc.id}");
+            } else {
+              print("   ⚠️ Skipping payment ${paymentDoc.id} (already exists)");
+            }
+          } catch (e) {
+            print("   ❌ Error parsing payment booking data: $e");
+          }
+        } else {
+          print("   ⚠️ Skipping payment ${paymentDoc.id} (status: $status, hasBookingData: ${paymentData['bookingData'] != null})");
+        }
+      }
+
+      // METHOD 3: Direct search in root bookings collection (fallback)
+      print("\n📋 METHOD 3: Checking root bookings collection...");
+      try {
+        final rootBookingsSnapshot = await firestore
+            .collection('bookings')
+            .where('userId', isEqualTo: uid)
+            .get();
+
+        print("📋 Found ${rootBookingsSnapshot.docs.length} bookings in root collection");
+
+        for (final bookingDoc in rootBookingsSnapshot.docs) {
+          final data = bookingDoc.data();
+          data['bookingId'] = bookingDoc.id;
+          data['source'] = 'root';
+
+          // Check if already exists
+          final existingBooking = allBookings.any((booking) =>
+          booking['bookingId'] == bookingDoc.id);
+
+          if (!existingBooking) {
+            allBookings.add(data);
+            print("   ✅ Added root booking: ${bookingDoc.id}");
+          }
+        }
+      } catch (e) {
+        print("   ⚠️ Root bookings collection doesn't exist or error: $e");
+      }
+
+      // METHOD 4: Check user document for embedded bookings
+      print("\n👤 METHOD 4: Checking user document...");
+      try {
+        final userDoc = await firestore.collection('users').doc(uid).get();
+        if (userDoc.exists) {
+          final userData = userDoc.data()!;
+          print("👤 User document exists with keys: ${userData.keys}");
+
+          if (userData['bookings'] != null) {
+            final userBookings = userData['bookings'] as List;
+            print("👤 Found ${userBookings.length} bookings in user document");
+
+            for (int i = 0; i < userBookings.length; i++) {
+              final booking = Map<String, dynamic>.from(userBookings[i]);
+              booking['bookingId'] = 'user_$i';
+              booking['source'] = 'user_doc';
+              allBookings.add(booking);
+              print("   ✅ Added user doc booking: user_$i");
+            }
+          }
+        }
+      } catch (e) {
+        print("   ⚠️ Error checking user document: $e");
+      }
+
+      print("\n📊 SUMMARY:");
+      print("📋 Total bookings found: ${allBookings.length}");
+
+      for (int i = 0; i < allBookings.length; i++) {
+        final booking = allBookings[i];
+        print("📋 Booking $i:");
+        print("   - ID: ${booking['bookingId']}");
+        print("   - Source: ${booking['source']}");
+        print("   - Status: ${booking['status']}");
+        print("   - Date: ${booking['selectedDate']}");
+        print("   - Type: ${booking['cleaningType']}");
+        print("   - Payment ID: ${booking['paymentId']}");
+      }
+
+      return allBookings;
 
     } catch (e) {
-      print("❌ Error getting bookings: $e");
-      return [];
+      print("❌ CRITICAL ERROR getting bookings: $e");
+      print("🔍 Stack trace: ${StackTrace.current}");
+      rethrow;
     }
   }
 
+  // Keep all other methods the same
   Future<List<Map<String, dynamic>>> getBookingsByStatus(String status) async {
-    final uid = auth.currentUser?.uid;
-    if (uid == null) {
-      throw Exception("User must be authenticated");
-    }
-
-    try {
-      final locationId = await _getUserLocationId();
-      if (locationId == null) {
-        return [];
-      }
-
-      final snapshot = await firestore
-          .collection('users')
-          .doc(uid)
-          .collection('locations')
-          .doc(locationId)
-          .collection('bookings')
-          .where('status', isEqualTo: status)
-          .orderBy('timestamp', descending: true)
-          .get();
-
-      final bookings = snapshot.docs.map((doc) {
-        final data = doc.data();
-        data['bookingId'] = doc.id;
-        return data;
-      }).toList();
-
-      print("📋 Found ${bookings.length} $status bookings");
-      return bookings;
-
-    } catch (e) {
-      print("❌ Error getting $status bookings: $e");
-      return [];
-    }
+    final allBookings = await getUserBookings();
+    return allBookings.where((booking) =>
+    booking['status']?.toString().toLowerCase() == status.toLowerCase()).toList();
   }
 
   Future<void> updateBookingStatus(String bookingId, String status) async {
@@ -184,7 +293,6 @@ class BookingDisplayRepository {
     }).toList();
   }
 
-  // Private helper method
   Future<String?> _getUserLocationId() async {
     final uid = auth.currentUser?.uid;
     if (uid == null) {

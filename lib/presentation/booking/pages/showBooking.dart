@@ -8,7 +8,6 @@ import '../../../features/booking/showBooking/logic/booking_display_Bloc.dart';
 import '../../../features/booking/showBooking/logic/booking_display_event.dart';
 import '../../../features/booking/showBooking/logic/booking_display_state.dart';
 
-
 class UpcomingBookingsWidget extends StatelessWidget {
   const UpcomingBookingsWidget({super.key});
 
@@ -24,7 +23,6 @@ class UpcomingBookingsWidget extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Header with "View All" button
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20.0),
             child: Row(
@@ -38,15 +36,7 @@ class UpcomingBookingsWidget extends StatelessWidget {
                   ),
                 ),
                 TextButton(
-                  onPressed: () {
-                    // Navigate to full ShowBookingScreen
-                    /*Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => const ShowBookingScreen(),
-                      ),
-                    );*/
-                  },
+                  onPressed: () {},
                   child: Text(
                     "View All",
                     style: GoogleFonts.manrope(
@@ -59,10 +49,7 @@ class UpcomingBookingsWidget extends StatelessWidget {
               ],
             ),
           ),
-
           const SizedBox(height: 12),
-
-          // Bookings List - Show only upcoming ones, max 3
           BlocBuilder<BookingDisplayBloc, BookingDisplayState>(
             builder: (context, state) {
               if (state is BookingDisplayLoading) {
@@ -100,7 +87,7 @@ class UpcomingBookingsWidget extends StatelessWidget {
                           ),
                         ),
                         const SizedBox(height: 8),
-                        TextButton(
+                        ElevatedButton(
                           onPressed: () {
                             context.read<BookingDisplayBloc>().add(RefreshBookings());
                           },
@@ -156,7 +143,6 @@ class UpcomingBookingsWidget extends StatelessWidget {
                   );
                 }
 
-                // Show max 3 upcoming bookings
                 return ListView.builder(
                   shrinkWrap: true,
                   physics: const NeverScrollableScrollPhysics(),
@@ -192,7 +178,6 @@ class UpcomingBookingsWidget extends StatelessWidget {
       }
     }).toList();
 
-    // Sort by date (earliest first)
     upcoming.sort((a, b) {
       try {
         final dateA = DateTime.parse(a['selectedDate']);
@@ -243,7 +228,6 @@ class UpcomingBookingsWidget extends StatelessWidget {
       ),
       child: Row(
         children: [
-          // Date circle
           Container(
             width: 50,
             height: 50,
@@ -272,10 +256,7 @@ class UpcomingBookingsWidget extends StatelessWidget {
               ],
             ),
           ),
-
           const SizedBox(width: 16),
-
-          // Booking details
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -305,8 +286,6 @@ class UpcomingBookingsWidget extends StatelessWidget {
               ],
             ),
           ),
-
-          // Status badge
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
             decoration: BoxDecoration(
