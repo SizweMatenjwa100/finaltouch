@@ -96,13 +96,13 @@ class _HomepageState extends State<Homepage> {
                         Servicecard(title: "Mobile Carwash Service ", image:'assets/images/service_car.png' ),
 
                       ],
+
                     ),
                   ),
                 ),
               ),
               SizedBox(height: 8,),
               UpcomingBookingsWidget()
-
 
 
 

@@ -1,3 +1,4 @@
+// lib/main.dart - UPDATED WITH PROFILE BLOC
 import 'package:finaltouch/features/location/logic/authGate.dart';
 import 'package:finaltouch/presentation/auth/pages/loginscreen.dart';
 import 'package:flutter/material.dart';
@@ -25,6 +26,10 @@ import 'features/booking/logic/booking_bloc.dart';
 // PAYMENT ✅ (new)
 import 'features/payment/data/payment_repository.dart';
 import 'features/payment/logic/payment_bloc.dart';
+
+// PROFILE ✅ (new)
+import 'features/profile/data/profile_repository.dart';
+import 'features/profile/logic/profile_bloc.dart';
 
 // APP
 import 'main_navigation.dart';
@@ -76,12 +81,22 @@ class MyApp extends StatelessWidget {
           ),
         ),
 
-        // PAYMENT BLOC ✅ (new)
+        // PAYMENT BLOC ✅
         BlocProvider(
           create: (_) => PaymentBloc(
             paymentRepository: PaymentRepository(
               firestore: firestore,
               auth: auth,
+            ),
+          ),
+        ),
+
+        // PROFILE BLOC ✅ (new)
+        BlocProvider(
+          create: (_) => ProfileBloc(
+            profileRepository: ProfileRepository(
+              auth: auth,
+              firestore: firestore,
             ),
           ),
         ),
