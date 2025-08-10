@@ -20,7 +20,7 @@ class _MainNavigationState extends State<MainNavigation> {
   final List<Widget> _screens = [
     Homepage(),
     Searchscreen(),
-    Mainbooking(),
+    MainBooking(),
     EnhancedTrackingScreen(),
     ProfileScreen(), // Updated to use the new ProfileScreen
   ];
