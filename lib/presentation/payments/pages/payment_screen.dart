@@ -1,4 +1,4 @@
-// lib/presentation/payment/pages/payment_screen.dart - FINAL FIXED VERSION
+// lib/presentation/payment/pages/payment_screen.dart - NAVIGATE TO MAIN NAVIGATION
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -12,6 +12,7 @@ import '../../../features/payment/logic/payment_bloc.dart';
 import '../../../features/payment/logic/payment_event.dart';
 import '../../../features/payment/logic/payment_state.dart';
 import '../../../services/pricing_service.dart';
+import '../../../main_navigation.dart';
 
 class PaymentScreen extends StatefulWidget {
   final Map<String, dynamic> bookingData;
@@ -139,15 +140,19 @@ class _PaymentScreenState extends State<PaymentScreen> {
             width: double.infinity,
             child: ElevatedButton(
               onPressed: () {
-                Navigator.of(context).pop(); // Close dialog
-                Navigator.popUntil(context, (route) => route.isFirst); // Go to home
+                // Navigate to MainNavigation instead of popping to first route
+                Navigator.pushAndRemoveUntil(
+                  context,
+                  MaterialPageRoute(builder: (context) => const MainNavigation()),
+                      (route) => false,
+                );
               },
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF1CABE3),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
               ),
               child: Text(
-                "Continue",
+                "Go to Home",
                 style: GoogleFonts.manrope(
                   color: Colors.white,
                   fontWeight: FontWeight.bold,

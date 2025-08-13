@@ -1,4 +1,4 @@
-// lib/presentation/booking/pages/Homecleaning_booking.dart - WITH DYNAMIC PRICING
+// lib/presentation/booking/pages/Homecleaning_booking.dart - FIXED PROGRESS LOGIC
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -146,92 +146,34 @@ class _HomecleaningBookingState extends State<HomecleaningBooking> {
                         const DynamicPricingWidget(showDetails: true),
                         const SizedBox(height: 24),
 
-                        // Progress indicator
-                        BlocBuilder<BookingBloc, BookingState>(
-                          bloc: _bookingBloc,
-                          builder: (context, state) {
-                            final data = _bookingBloc.currentBookingData;
-                            final hasPropertyType = data['propertyType'] != null && data['propertyType'].toString().isNotEmpty;
-                            final hasCleaningType = data['cleaningType'] != null && data['cleaningType'].toString().isNotEmpty;
-                            final progress = (hasPropertyType ? 0.5 : 0.0) + (hasCleaningType ? 0.5 : 0.0);
-
-                            return Container(
-                              padding: const EdgeInsets.all(16),
-                              decoration: BoxDecoration(
-                                color: Colors.grey.shade50,
-                                borderRadius: BorderRadius.circular(12),
-                                border: Border.all(color: Colors.grey.shade200),
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    children: [
-                                      Icon(
-                                        Icons.checklist,
-                                        color: progress == 1.0 ? Colors.green : Colors.grey.shade600,
-                                        size: 20,
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Text(
-                                        "Booking Progress",
-                                        style: GoogleFonts.manrope(
-                                          fontSize: 14,
-                                          fontWeight: FontWeight.w600,
-                                        ),
-                                      ),
-                                      const Spacer(),
-                                      Text(
-                                        "${(progress * 100).round()}%",
-                                        style: GoogleFonts.manrope(
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.bold,
-                                          color: progress == 1.0 ? Colors.green : const Color(0xFF1CABE3),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 12),
-                                  LinearProgressIndicator(
-                                    value: progress,
-                                    backgroundColor: Colors.grey.shade200,
-                                    valueColor: AlwaysStoppedAnimation<Color>(
-                                      progress == 1.0 ? Colors.green : const Color(0xFF1CABE3),
-                                    ),
-                                    minHeight: 6,
-                                  ),
-                                  const SizedBox(height: 8),
-                                  Row(
-                                    children: [
-                                      _buildProgressItem(
-                                        "Property Info",
-                                        hasPropertyType,
-                                      ),
-                                      const SizedBox(width: 16),
-                                      _buildProgressItem(
-                                        "Cleaning Type",
-                                        hasCleaningType,
-                                      ),
-                                    ],
-                                  ),
-                                ],
-                              ),
-                            );
-                          },
-                        ),
-
-                        const SizedBox(height: 24),
-
                         // Continue button
                         BlocBuilder<BookingBloc, BookingState>(
                           bloc: _bookingBloc,
                           builder: (context, state) {
                             final isLoading = state is LocationLoading;
                             final data = _bookingBloc.currentBookingData;
-                            final canProceed = data['propertyType'] != null &&
-                                data['propertyType'].toString().isNotEmpty &&
-                                data['cleaningType'] != null &&
-                                data['cleaningType'].toString().isNotEmpty;
+                            final hasPropertyType = data['propertyType'] != null && data['propertyType'].toString().isNotEmpty;
+                            final hasCleaningType = data['cleaningType'] != null && data['cleaningType'].toString().isNotEmpty;
+                            final canProceed = hasPropertyType && hasCleaningType;
+
+                            // Different button states based on form completion
+                            String buttonText;
+                            IconData? buttonIcon;
+                            Color buttonColor;
+
+                            if (isLoading) {
+                              buttonText = "Getting location...";
+                              buttonIcon = null;
+                              buttonColor = const Color(0xFF1CABE3);
+                            } else if (canProceed) {
+                              buttonText = "Continue to Schedule";
+                              buttonIcon = Icons.arrow_forward;
+                              buttonColor = const Color(0xFF1CABE3);
+                            } else {
+                              buttonText = "Complete form to continue";
+                              buttonIcon = null;
+                              buttonColor = Colors.grey.shade400;
+                            }
 
                             return Container(
                               width: double.infinity,
@@ -247,13 +189,9 @@ class _HomecleaningBookingState extends State<HomecleaningBooking> {
                                 ] : null,
                               ),
                               child: ElevatedButton(
-                                onPressed: (isLoading || !canProceed)
-                                    ? null
-                                    : _proceedToSchedule,
+                                onPressed: (isLoading || !canProceed) ? null : _proceedToSchedule,
                                 style: ElevatedButton.styleFrom(
-                                  backgroundColor: canProceed
-                                      ? const Color(0xFF1CABE3)
-                                      : Colors.grey.shade300,
+                                  backgroundColor: buttonColor,
                                   disabledBackgroundColor: Colors.grey.shade300,
                                   shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(12),
@@ -286,15 +224,8 @@ class _HomecleaningBookingState extends State<HomecleaningBooking> {
                                     : Row(
                                   mainAxisAlignment: MainAxisAlignment.center,
                                   children: [
-                                    if (canProceed)
-                                      const Icon(
-                                        Icons.arrow_forward,
-                                        color: Colors.white,
-                                        size: 20,
-                                      ),
-                                    if (canProceed) const SizedBox(width: 8),
                                     Text(
-                                      canProceed ? "Continue to Schedule" : "Complete form to continue",
+                                      buttonText,
                                       style: GoogleFonts.plusJakartaSans(
                                         fontSize: 16,
                                         fontWeight: FontWeight.bold,
@@ -321,35 +252,5 @@ class _HomecleaningBookingState extends State<HomecleaningBooking> {
     );
   }
 
-  Widget _buildProgressItem(String label, bool isCompleted) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          width: 16,
-          height: 16,
-          decoration: BoxDecoration(
-            color: isCompleted ? Colors.green : Colors.grey.shade300,
-            shape: BoxShape.circle,
-          ),
-          child: isCompleted
-              ? const Icon(
-            Icons.check,
-            color: Colors.white,
-            size: 12,
-          )
-              : null,
-        ),
-        const SizedBox(width: 6),
-        Text(
-          label,
-          style: GoogleFonts.manrope(
-            fontSize: 12,
-            color: isCompleted ? Colors.green : Colors.grey.shade600,
-            fontWeight: isCompleted ? FontWeight.w600 : FontWeight.normal,
-          ),
-        ),
-      ],
-    );
-  }
+
 }
