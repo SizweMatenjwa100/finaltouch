@@ -1,1 +1,46 @@
-{"flutter":{"platforms":{"android":{"default":{"projectId":"finaltouch-6102d","appId":"1:1066230435036:android:b39b24c5e1dde07291f819","fileOutput":"android/app/google-services.json"}},"ios":{"default":{"projectId":"finaltouch-6102d","appId":"1:1066230435036:ios:ccb2d7fee4e70cdd91f819","uploadDebugSymbols":false,"fileOutput":"ios/Runner/GoogleService-Info.plist"}},"dart":{"lib/firebase_options.dart":{"projectId":"finaltouch-6102d","configurations":{"android":"1:1066230435036:android:b39b24c5e1dde07291f819","ios":"1:1066230435036:ios:ccb2d7fee4e70cdd91f819"}}}}}}
+{
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "finaltouch-6102d",
+          "appId": "1:1066230435036:android:b39b24c5e1dde07291f819",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "ios": {
+        "default": {
+          "projectId": "finaltouch-6102d",
+          "appId": "1:1066230435036:ios:ccb2d7fee4e70cdd91f819",
+          "uploadDebugSymbols": false,
+          "fileOutput": "ios/Runner/GoogleService-Info.plist"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "finaltouch-6102d",
+          "configurations": {
+            "android": "1:1066230435036:android:b39b24c5e1dde07291f819",
+            "ios": "1:1066230435036:ios:ccb2d7fee4e70cdd91f819"
+          }
+        }
+      }
+    }
+  },
+  "functions": [
+    {
+      "source": "functions",
+      "codebase": "default",
+      "ignore": [
+        "node_modules",
+        ".git",
+        "firebase-debug.log",
+        "firebase-debug.*.log",
+        "*.local"
+      ],
+      "predeploy": [
+        "npm --prefix \"$RESOURCE_DIR\" run lint"
+      ]
+    }
+  ]
+}
