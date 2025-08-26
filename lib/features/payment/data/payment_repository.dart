@@ -15,7 +15,7 @@ class PaymentRepository {
   static const String merchantId = "10041473";
   static const String merchantKey = "qrs8b5w5uroiq";
   static const String passphrase = "";
-  static const bool sandboxMode = false; // Set to false for production
+  static const bool sandboxMode = true; // Set to false for production
 
   // Your deployed Cloud Function URL
 
