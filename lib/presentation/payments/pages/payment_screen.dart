@@ -13,6 +13,7 @@ import '../../../features/payment/logic/payment_event.dart';
 import '../../../features/payment/logic/payment_state.dart';
 import '../../../services/pricing_service.dart';
 import '../../../main_navigation.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 
 class PaymentScreen extends StatefulWidget {
   final Map<String, dynamic> bookingData;
@@ -39,6 +40,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
       paymentRepository: PaymentRepository(
         auth: FirebaseAuth.instance,
         firestore: FirebaseFirestore.instance,
+          functions: FirebaseFunctions.instance,
       ),
     );
     _priceBreakdown = PricingService.calculatePrice(widget.bookingData);
