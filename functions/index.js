@@ -1,7 +1,7 @@
 // functions/index.js - Clean PayFast ITN Handler with Sandbox Credentials
-const {onRequest} = require("firebase-functions/v2/https");
-const {initializeApp} = require("firebase-admin/app");
-const {getFirestore} = require("firebase-admin/firestore");
+const { onRequest, onCall } = require("firebase-functions/v2/https");
+const { initializeApp } = require("firebase-admin/app");
+const { getFirestore } = require("firebase-admin/firestore");
 const crypto = require("crypto");
 const https = require("https");
 const querystring = require("querystring");
@@ -16,90 +16,99 @@ const PAYFAST_CONFIG = {
   merchant_key: "qrs8b5w5uroiq",
   passphrase: "", // Empty - no passphrase configured
   sandbox: true,
-  host: "sandbox.payfast.co.za"
+  host: "sandbox.payfast.co.za",
 };
 
 /**
  * PayFast ITN (Instant Transaction Notification) Handler
  */
-exports.payfastITN = onRequest({cors: true}, async (req, res) => {
+exports.payfastITN = onRequest({ cors: true }, async (req, res) => {
   console.log("ITN Received:", req.method, req.url);
-
   if (req.method !== "POST") {
     console.log("Invalid method:", req.method);
     return res.status(405).send("Method Not Allowed");
   }
 
   try {
-    const itnData = req.body;
+    // Parse x-www-form-urlencoded body if needed
+    let itnData = req.body;
+    if (!itnData || Object.keys(itnData).length === 0) {
+      const raw = req.rawBody?.toString("utf8") || "";
+      itnData = querystring.parse(raw);
+    }
     console.log("ITN Data:", JSON.stringify(itnData, null, 2));
 
-    // Validate ITN data structure
+    // Basic validation + signature check
     if (!validateITNStructure(itnData)) {
       console.log("Invalid ITN structure");
       return res.status(400).send("Invalid ITN data structure");
     }
-
-    // Verify signature
     if (!verifySignature(itnData)) {
       console.log("Invalid signature");
       return res.status(400).send("Invalid signature");
     }
 
-    // Validate with PayFast
-    const isValidWithPayFast = await validateWithPayFast(itnData);
-    if (!isValidWithPayFast) {
-      console.log("PayFast validation failed");
-      return res.status(400).send("PayFast validation failed");
-    }
-
-    // Process the payment
-    await processPayment(itnData);
-
-    console.log("ITN processed successfully");
+    // Reply fast so PayFast doesn't retry
     res.status(200).send("OK");
 
+    // Continue processing asynchronously
+    const isValidWithPayFast = await validateWithPayFast(itnData);
+    if (!isValidWithPayFast) {
+      console.log("PayFast validation failed AFTER 200");
+      return;
+    }
+
+    await processPayment(itnData);
+    console.log("Payment processed async after 200");
   } catch (error) {
     console.error("ITN processing error:", error);
-    res.status(500).send("Internal Server Error");
+    if (!res.headersSent) {
+      return res.status(500).send("Internal Server Error");
+    }
   }
 });
 
 function validateITNStructure(data) {
   const requiredFields = [
-    "m_payment_id", "pf_payment_id", "payment_status",
-    "item_name", "amount_gross", "amount_fee", "amount_net"
+    "m_payment_id",
+    "pf_payment_id",
+    "payment_status",
+    "item_name",
+    "amount_gross",
   ];
-
   for (const field of requiredFields) {
-    if (!Object.prototype.hasOwnProperty.call(data, field) ||
-        data[field] === "") {
+    if (
+      !Object.prototype.hasOwnProperty.call(data, field) ||
+      data[field] === ""
+    ) {
       console.log(`Missing required field: ${field}`);
       return false;
     }
   }
-
   return true;
 }
 
 function verifySignature(data) {
   const pfParamString = Object.keys(data)
-      .filter((key) => key !== "signature")
-      .sort()
-      .map((key) =>
-        `${key}=${encodeURIComponent(data[key]).replace(/%20/g, "+")}`)
-      .join("&");
+    .filter((key) => key !== "signature")
+    .sort()
+    .map(
+      (key) =>
+        `${key}=${encodeURIComponent(String(data[key])).replace(/%20/g, "+")}`
+    )
+    .join("&");
 
   let stringToHash = pfParamString;
   if (PAYFAST_CONFIG.sandbox && PAYFAST_CONFIG.passphrase) {
-    stringToHash += `&passphrase=${
-      encodeURIComponent(PAYFAST_CONFIG.passphrase)}`;
+    stringToHash += `&passphrase=${encodeURIComponent(
+      PAYFAST_CONFIG.passphrase
+    )}`;
   }
 
   const calculatedSignature = crypto
-      .createHash("md5")
-      .update(stringToHash)
-      .digest("hex");
+    .createHash("md5")
+    .update(stringToHash)
+    .digest("hex");
 
   console.log("Signature verification:", {
     received: data.signature,
@@ -127,14 +136,11 @@ async function validateWithPayFast(data) {
 
     const request = https.request(options, (response) => {
       let responseData = "";
-
       response.on("data", (chunk) => {
         responseData += chunk;
       });
-
       response.on("end", () => {
-        console.log("PayFast validation response:",
-            responseData.trim());
+        console.log("PayFast validation response:", responseData.trim());
         resolve(responseData.trim() === "VALID");
       });
     });
@@ -151,7 +157,7 @@ async function validateWithPayFast(data) {
 
 async function processPayment(itnData) {
   const paymentId = itnData.m_payment_id;
-  const paymentStatus = itnData.payment_status;
+  const paymentStatus = String(itnData.payment_status || "");
 
   console.log(`Processing payment ${paymentId} with status ${paymentStatus}`);
 
@@ -174,15 +180,20 @@ async function processPayment(itnData) {
     const expectedAmount = parseFloat(paymentData.amount);
     const receivedAmount = parseFloat(itnData.amount_gross);
 
-    if (Math.abs(expectedAmount - receivedAmount) > 0.01) {
-      throw new Error(`Amount mismatch: expected ${expectedAmount},
-        received ${receivedAmount}`);
+    if (isNaN(expectedAmount) || isNaN(receivedAmount)) {
+      throw new Error("Invalid amount values for comparison");
     }
 
-    if (paymentStatus === "COMPLETE") {
+    if (Math.abs(expectedAmount - receivedAmount) > 0.01) {
+      throw new Error(
+        `Amount mismatch: expected ${expectedAmount}, received ${receivedAmount}`
+      );
+    }
+
+    if (paymentStatus.toUpperCase() === "COMPLETE") {
       await handleSuccessfulPayment(paymentRef, itnData, paymentData);
     } else {
-      await handleFailedPayment(paymentRef, itnData, paymentStatus);
+      await handleFailedPayment(paymentRef, itnData, paymentStatus.toUpperCase());
     }
   } catch (error) {
     console.error("Payment processing error:", error);
@@ -206,8 +217,8 @@ async function handleSuccessfulPayment(paymentRef, itnData, paymentData) {
     pfPaymentId: itnData.pf_payment_id,
     paymentDetails: {
       amountGross: parseFloat(itnData.amount_gross),
-      amountFee: parseFloat(itnData.amount_fee),
-      amountNet: parseFloat(itnData.amount_net),
+      amountFee: parseFloat(itnData.amount_fee || 0),
+      amountNet: parseFloat(itnData.amount_net || 0),
       paymentStatus: itnData.payment_status,
       paymentDate: new Date(itnData.payment_date || new Date()),
       itemName: itnData.item_name,
@@ -222,12 +233,12 @@ async function handleSuccessfulPayment(paymentRef, itnData, paymentData) {
   const locationId = await getOrCreateUserLocation(userId);
 
   const bookingRef = db
-      .collection("users")
-      .doc(userId)
-      .collection("locations")
-      .doc(locationId)
-      .collection("bookings")
-      .doc();
+    .collection("users")
+    .doc(userId)
+    .collection("locations")
+    .doc(locationId)
+    .collection("bookings")
+    .doc();
 
   const completeBookingData = {
     ...bookingData,
@@ -248,16 +259,17 @@ async function handleSuccessfulPayment(paymentRef, itnData, paymentData) {
   batch.set(bookingRef, completeBookingData);
 
   const notificationRef = db
-      .collection("users")
-      .doc(userId)
-      .collection("notifications")
-      .doc();
+    .collection("users")
+    .doc(userId)
+    .collection("notifications")
+    .doc();
 
   batch.set(notificationRef, {
     type: "payment_success",
     title: "Payment Successful!",
-    message: `Your booking for ${bookingData.cleaningType ||
-      "cleaning service"} has been confirmed.`,
+    message: `Your booking for ${
+      bookingData.cleaningType || "cleaning service"
+    } has been confirmed.`,
     paymentId: paymentData.paymentId,
     bookingId: bookingRef.id,
     read: false,
@@ -266,9 +278,9 @@ async function handleSuccessfulPayment(paymentRef, itnData, paymentData) {
 
   await batch.commit();
 
-  console.log("Payment and booking processed successfully");
-  console.log(`Booking created: users/${userId}/locations/
-    ${locationId}/bookings/${bookingRef.id}`);
+  console.log(
+    `Payment and booking processed successfully. Booking created: users/${userId}/locations/${locationId}/bookings/${bookingRef.id}`
+  );
 }
 
 async function handleFailedPayment(paymentRef, itnData, paymentStatus) {
@@ -288,8 +300,10 @@ async function handleFailedPayment(paymentRef, itnData, paymentStatus) {
 }
 
 async function getOrCreateUserLocation(userId) {
-  const locationsRef = db.collection("users").doc(userId)
-      .collection("locations");
+  const locationsRef = db
+    .collection("users")
+    .doc(userId)
+    .collection("locations");
   const locationsSnapshot = await locationsRef.limit(1).get();
 
   if (!locationsSnapshot.empty) {
@@ -311,15 +325,15 @@ async function getOrCreateUserLocation(userId) {
 
 function getFailureReason(status) {
   const reasons = {
-    "CANCELLED": "Payment was cancelled by user",
-    "FAILED": "Payment failed - insufficient funds or card declined",
-    "PENDING": "Payment is still being processed",
-    "EXPIRED": "Payment session expired",
+    CANCELLED: "Payment was cancelled by user",
+    FAILED: "Payment failed - insufficient funds or card declined",
+    PENDING: "Payment is still being processed",
+    EXPIRED: "Payment session expired",
   };
   return reasons[status] || `Payment failed with status: ${status}`;
 }
 
-exports.payfastHealthCheck = onRequest({cors: true}, (req, res) => {
+exports.payfastHealthCheck = onRequest({ cors: true }, (req, res) => {
   res.json({
     status: "healthy",
     timestamp: new Date().toISOString(),
@@ -331,32 +345,21 @@ exports.payfastHealthCheck = onRequest({cors: true}, (req, res) => {
   });
 });
 
-exports.verifyPayment = onRequest({cors: true}, async (req, res) => {
-  const {paymentId} = req.body;
+// Callable for client-side verification
+exports.verifyPayment = onCall(async (req) => {
+  const paymentId = req.data?.paymentId;
+  if (!paymentId) throw new Error("Payment ID is required");
 
-  if (!paymentId) {
-    return res.status(400).json({error: "Payment ID is required"});
-  }
+  const snap = await db.collection("payments").doc(paymentId).get();
+  if (!snap.exists) throw new Error("Payment not found");
 
-  try {
-    const paymentDoc = await db.collection("payments").doc(paymentId).get();
-
-    if (!paymentDoc.exists) {
-      return res.status(404).json({error: "Payment not found"});
-    }
-
-    const paymentData = paymentDoc.data();
-
-    return res.json({
-      paymentId: paymentId,
-      status: paymentData.status,
-      amount: paymentData.amount,
-      createdAt: paymentData.createdAt,
-      completedAt: paymentData.completedAt,
-      processedVia: paymentData.processedVia,
-    });
-  } catch (error) {
-    console.error("Payment verification error:", error);
-    return res.status(500).json({error: "Payment verification failed"});
-  }
+  const data = snap.data();
+  return {
+    paymentId,
+    status: data.status,
+    amount: data.amount,
+    createdAt: data.createdAt,
+    completedAt: data.completedAt,
+    processedVia: data.processedVia,
+  };
 });

@@ -88,7 +88,8 @@ class MyApp extends StatelessWidget {
             paymentRepository: PaymentRepository(
               firestore: firestore,
               auth: auth,
-              functions: FirebaseFunctions.instance,
+              functions: FirebaseFunctions.instanceFor(region: 'us-central1'),
+
 
             ),
           ),

@@ -1,4 +1,5 @@
-// lib/presentation/payment/pages/payment_screen.dart - NAVIGATE TO MAIN NAVIGATION
+// lib/presentation/payment/pages/payment_screen.dart - NAVIGATE TO MAIN NAVIGATION (ITN-DRIVEN)
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -6,6 +7,7 @@ import 'package:webview_flutter/webview_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 
 import '../../../features/payment/data/payment_repository.dart';
 import '../../../features/payment/logic/payment_bloc.dart';
@@ -13,7 +15,6 @@ import '../../../features/payment/logic/payment_event.dart';
 import '../../../features/payment/logic/payment_state.dart';
 import '../../../services/pricing_service.dart';
 import '../../../main_navigation.dart';
-import 'package:cloud_functions/cloud_functions.dart';
 
 class PaymentScreen extends StatefulWidget {
   final Map<String, dynamic> bookingData;
@@ -28,28 +29,30 @@ class PaymentScreen extends StatefulWidget {
 }
 
 class _PaymentScreenState extends State<PaymentScreen> {
-  late PaymentBloc _paymentBloc;
+  late final PaymentRepository _repo;
+  late final PaymentBloc _paymentBloc;
   late PriceBreakdown _priceBreakdown;
   WebViewController? _webViewController;
-  String _currentPaymentId = ''; // Store the current payment ID
+
+  String _currentPaymentId = '';
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _statusSub;
 
   @override
   void initState() {
     super.initState();
-    _paymentBloc = PaymentBloc(
-      paymentRepository: PaymentRepository(
-        auth: FirebaseAuth.instance,
-        firestore: FirebaseFirestore.instance,
-          functions: FirebaseFunctions.instance,
-      ),
+
+    _repo = PaymentRepository(
+      auth: FirebaseAuth.instance,
+      firestore: FirebaseFirestore.instance,
+      functions: FirebaseFunctions.instanceFor(region: 'us-central1'),
     );
+
+    _paymentBloc = PaymentBloc(paymentRepository: _repo);
     _priceBreakdown = PricingService.calculatePrice(widget.bookingData);
     _initializeWebView();
 
-    // Automatically initiate payment when screen loads
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _initiatePayment();
-    });
+    // Kick off payment creation after first frame
+    WidgetsBinding.instance.addPostFrameCallback((_) => _initiatePayment());
   }
 
   void _initializeWebView() {
@@ -67,9 +70,9 @@ class _PaymentScreenState extends State<PaymentScreen> {
             print("🌐 Payment page finished loading: $url");
           },
           onNavigationRequest: (NavigationRequest request) {
+            // We no longer try to interpret success/failure from the URL.
+            // ITN webhook will flip status in Firestore; we just allow navigation.
             print("🌐 Navigation request: ${request.url}");
-            // Use the stored payment ID
-            _handlePaymentCallback(request.url, _currentPaymentId);
             return NavigationDecision.navigate;
           },
         ),
@@ -78,6 +81,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
   @override
   void dispose() {
+    _statusSub?.cancel();
     _paymentBloc.close();
     super.dispose();
   }
@@ -90,7 +94,36 @@ class _PaymentScreenState extends State<PaymentScreen> {
     ));
   }
 
-  void _showPaymentSuccessDialog(String bookingId) {
+  void _startMonitoringPayment(String paymentId) {
+    _statusSub?.cancel();
+    _statusSub = FirebaseFirestore.instance
+        .collection('payments')
+        .doc(paymentId)
+        .snapshots()
+        .listen((snap) {
+      if (!snap.exists) return;
+      final data = snap.data()!;
+      final status = (data['status'] ?? '').toString().toLowerCase();
+
+      print("👀 Payment $paymentId status update: $status");
+
+      if (status == 'completed') {
+        // Close the WebView page and show success
+        _showPaymentSuccessDialog(paymentId);
+      } else if (status == 'failed' || status == 'cancelled') {
+        _showFailureSnack(
+          status == 'failed'
+              ? "Payment failed. Please try again."
+              : "Payment was cancelled.",
+        );
+      }
+    });
+  }
+
+  void _showPaymentSuccessDialog(String paymentId) {
+    // Stop listening once we've completed
+    _statusSub?.cancel();
+
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -105,31 +138,23 @@ class _PaymentScreenState extends State<PaymentScreen> {
                 color: Colors.green,
                 shape: BoxShape.circle,
               ),
-              child: const Icon(
-                Icons.check,
-                color: Colors.white,
-                size: 32,
-              ),
+              child: const Icon(Icons.check, color: Colors.white, size: 32),
             ),
             const SizedBox(height: 16),
             Text(
               "Payment Successful!",
-              style: GoogleFonts.manrope(
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
-              ),
+              style: GoogleFonts.manrope(fontSize: 20, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 8),
             Text(
               "Your booking has been confirmed and you'll receive a confirmation email shortly.",
               textAlign: TextAlign.center,
-              style: GoogleFonts.manrope(
-                color: Colors.grey.shade600,
-              ),
+              style: GoogleFonts.manrope(color: Colors.grey.shade600),
             ),
             const SizedBox(height: 8),
             Text(
-              "Booking ID: ${bookingId.substring(0, 8).toUpperCase()}",
+              // Show the Payment ID (booking ID is created server-side; you can fetch it on the next screen)
+              "Payment ID: ${paymentId.substring(0, 8).toUpperCase()}",
               style: GoogleFonts.manrope(
                 fontWeight: FontWeight.bold,
                 color: const Color(0xFF1CABE3),
@@ -142,7 +167,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
             width: double.infinity,
             child: ElevatedButton(
               onPressed: () {
-                // Navigate to MainNavigation instead of popping to first route
+                // Navigate to Home
                 Navigator.pushAndRemoveUntil(
                   context,
                   MaterialPageRoute(builder: (context) => const MainNavigation()),
@@ -155,14 +180,29 @@ class _PaymentScreenState extends State<PaymentScreen> {
               ),
               child: Text(
                 "Go to Home",
-                style: GoogleFonts.manrope(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                ),
+                style: GoogleFonts.manrope(color: Colors.white, fontWeight: FontWeight.bold),
               ),
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  void _showFailureSnack(String message) {
+    _statusSub?.cancel();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            const Icon(Icons.error_outline, color: Colors.white),
+            const SizedBox(width: 8),
+            Expanded(child: Text(message)),
+          ],
+        ),
+        backgroundColor: Colors.red,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       ),
     );
   }
@@ -174,10 +214,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
       child: Scaffold(
         backgroundColor: Colors.white,
         appBar: AppBar(
-          title: Text(
-            "Secure Payment",
-            style: GoogleFonts.manrope(fontWeight: FontWeight.bold),
-          ),
+          title: Text("Secure Payment", style: GoogleFonts.manrope(fontWeight: FontWeight.bold)),
           leading: IconButton(
             icon: const Icon(Icons.arrow_back),
             onPressed: () => Navigator.pop(context),
@@ -187,27 +224,12 @@ class _PaymentScreenState extends State<PaymentScreen> {
         ),
         body: BlocListener<PaymentBloc, PaymentState>(
           listener: (context, state) {
-            // Store the payment ID when it's ready
             if (state is PaymentReady) {
               _currentPaymentId = state.paymentId;
               print("💾 Stored payment ID: $_currentPaymentId");
-            } else if (state is PaymentSuccess) {
-              _showPaymentSuccessDialog(state.bookingId);
+              _startMonitoringPayment(_currentPaymentId);
             } else if (state is PaymentFailed) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Row(
-                    children: [
-                      const Icon(Icons.error_outline, color: Colors.white),
-                      const SizedBox(width: 8),
-                      Expanded(child: Text(state.error)),
-                    ],
-                  ),
-                  backgroundColor: Colors.red,
-                  behavior: SnackBarBehavior.floating,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                ),
-              );
+              _showFailureSnack(state.error);
             }
           },
           child: BlocBuilder<PaymentBloc, PaymentState>(
@@ -258,29 +280,17 @@ class _PaymentScreenState extends State<PaymentScreen> {
           const SizedBox(height: 8),
           Text(
             "Please wait...",
-            style: GoogleFonts.manrope(
-              fontSize: 14,
-              color: Colors.grey.shade600,
-            ),
+            style: GoogleFonts.manrope(fontSize: 14, color: Colors.grey.shade600),
           ),
           const SizedBox(height: 32),
-          // Security indicator
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const Icon(
-                Icons.security,
-                size: 16,
-                color: Colors.green,
-              ),
+              const Icon(Icons.security, size: 16, color: Colors.green),
               const SizedBox(width: 4),
               Text(
                 "Secured by PayFast",
-                style: GoogleFonts.manrope(
-                  fontSize: 12,
-                  color: Colors.green,
-                  fontWeight: FontWeight.w500,
-                ),
+                style: GoogleFonts.manrope(fontSize: 12, color: Colors.green, fontWeight: FontWeight.w500),
               ),
             ],
           ),
@@ -290,7 +300,6 @@ class _PaymentScreenState extends State<PaymentScreen> {
   }
 
   Widget _buildPaymentWebView(String paymentUrl, String paymentId) {
-    // Load the payment URL
     if (_webViewController != null) {
       _webViewController!.loadRequest(Uri.parse(paymentUrl));
     }
@@ -302,66 +311,43 @@ class _PaymentScreenState extends State<PaymentScreen> {
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
             gradient: LinearGradient(
-              colors: [
-                const Color(0xFF1CABE3).withOpacity(0.1),
-                Colors.white,
-              ],
+              colors: [const Color(0xFF1CABE3).withOpacity(0.1), Colors.white],
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
             ),
-            border: Border(
-              bottom: BorderSide(color: Colors.grey.shade200),
-            ),
+            border: Border(bottom: BorderSide(color: Colors.grey.shade200)),
           ),
           child: Row(
             children: [
               Container(
                 padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: Colors.green,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: const Icon(
-                  Icons.security,
-                  color: Colors.white,
-                  size: 20,
-                ),
+                decoration: BoxDecoration(color: Colors.green, borderRadius: BorderRadius.circular(8)),
+                child: const Icon(Icons.security, color: Colors.white, size: 20),
               ),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      "Secure Payment Gateway",
+                    Text("Secure Payment Gateway",
                       style: GoogleFonts.manrope(
                         color: const Color(0xFF1CABE3),
                         fontWeight: FontWeight.bold,
                         fontSize: 14,
                       ),
                     ),
-                    Text(
-                      "Amount: ${PricingService.formatPrice(_priceBreakdown.total)}",
-                      style: GoogleFonts.manrope(
-                        color: Colors.grey.shade600,
-                        fontSize: 12,
-                      ),
+                    Text("Amount: ${PricingService.formatPrice(_priceBreakdown.total)}",
+                      style: GoogleFonts.manrope(color: Colors.grey.shade600, fontSize: 12),
                     ),
                   ],
                 ),
               ),
               TextButton(
                 onPressed: () => _openPaymentInBrowser(paymentUrl),
-                style: TextButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                ),
+                style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6)),
                 child: Text(
                   "Open in Browser",
-                  style: GoogleFonts.manrope(
-                    color: const Color(0xFF1CABE3),
-                    fontWeight: FontWeight.w600,
-                    fontSize: 12,
-                  ),
+                  style: GoogleFonts.manrope(color: const Color(0xFF1CABE3), fontWeight: FontWeight.w600, fontSize: 12),
                 ),
               ),
             ],
@@ -376,16 +362,9 @@ class _PaymentScreenState extends State<PaymentScreen> {
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                const CircularProgressIndicator(
-                  color: Color(0xFF1CABE3),
-                ),
+                const CircularProgressIndicator(color: Color(0xFF1CABE3)),
                 const SizedBox(height: 16),
-                Text(
-                  "Loading payment page...",
-                  style: GoogleFonts.manrope(
-                    color: Colors.grey.shade600,
-                  ),
-                ),
+                Text("Loading payment page...", style: GoogleFonts.manrope(color: Colors.grey.shade600)),
               ],
             ),
           ),
@@ -394,61 +373,29 @@ class _PaymentScreenState extends State<PaymentScreen> {
         // Bottom actions
         Container(
           padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.1),
-                blurRadius: 4,
-                offset: const Offset(0, -2),
-              ),
-            ],
-          ),
+          decoration: const BoxDecoration(color: Colors.white, boxShadow: [
+            BoxShadow(color: Color(0x1A000000), blurRadius: 4, offset: Offset(0, -2)),
+          ]),
           child: SafeArea(
             child: Row(
               children: [
                 Expanded(
                   child: OutlinedButton(
-                    onPressed: () {
-                      _paymentBloc.add(ProcessPaymentFailure(
-                        paymentId: paymentId,
-                        error: "Payment cancelled by user",
-                      ));
+                    onPressed: () async {
+                      // Optional: mark as cancelled server-side
+                      if (_currentPaymentId.isNotEmpty) {
+                        await _repo.cancelPayment(_currentPaymentId, "Payment cancelled by user");
+                      }
                       Navigator.pop(context);
                     },
                     style: OutlinedButton.styleFrom(
                       side: BorderSide(color: Colors.grey.shade400),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                       padding: const EdgeInsets.symmetric(vertical: 12),
                     ),
                     child: Text(
                       "Cancel Payment",
-                      style: GoogleFonts.manrope(
-                        color: Colors.grey.shade700,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: () => _simulatePaymentSuccess(paymentId),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.green,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                    ),
-                    child: Text(
-                      "Test Success",
-                      style: GoogleFonts.manrope(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w600,
-                      ),
+                      style: GoogleFonts.manrope(color: Colors.grey.shade700, fontWeight: FontWeight.w600),
                     ),
                   ),
                 ),
@@ -469,37 +416,15 @@ class _PaymentScreenState extends State<PaymentScreen> {
           children: [
             Container(
               padding: const EdgeInsets.all(24),
-              decoration: BoxDecoration(
-                color: Colors.red.withOpacity(0.1),
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(
-                Icons.error_outline,
-                size: 64,
-                color: Colors.red,
-              ),
+              decoration: BoxDecoration(color: Colors.red.withOpacity(0.1), shape: BoxShape.circle),
+              child: const Icon(Icons.error_outline, size: 64, color: Colors.red),
             ),
             const SizedBox(height: 24),
-            Text(
-              "Payment Failed",
-              style: GoogleFonts.manrope(
-                fontSize: 24,
-                fontWeight: FontWeight.bold,
-                color: Colors.red,
-              ),
-            ),
+            Text("Payment Failed",
+                style: GoogleFonts.manrope(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.red)),
             const SizedBox(height: 12),
-            Text(
-              state.error,
-              textAlign: TextAlign.center,
-              style: GoogleFonts.manrope(
-                fontSize: 16,
-                color: Colors.grey.shade600,
-              ),
-            ),
+            Text(state.error, textAlign: TextAlign.center, style: GoogleFonts.manrope(fontSize: 16, color: Colors.grey.shade600)),
             const SizedBox(height: 32),
-
-            // Action buttons
             Column(
               children: [
                 if (state.canRetry)
@@ -513,17 +438,12 @@ class _PaymentScreenState extends State<PaymentScreen> {
                         ));
                       },
                       icon: const Icon(Icons.refresh),
-                      label: Text(
-                        "Try Again",
-                        style: GoogleFonts.manrope(fontWeight: FontWeight.bold),
-                      ),
+                      label: Text("Try Again", style: GoogleFonts.manrope(fontWeight: FontWeight.bold)),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: const Color(0xFF1CABE3),
                         foregroundColor: Colors.white,
                         padding: const EdgeInsets.symmetric(vertical: 16),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                       ),
                     ),
                   ),
@@ -535,17 +455,10 @@ class _PaymentScreenState extends State<PaymentScreen> {
                     style: OutlinedButton.styleFrom(
                       side: BorderSide(color: Colors.grey.shade400),
                       padding: const EdgeInsets.symmetric(vertical: 16),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                     ),
-                    child: Text(
-                      "Back to Review",
-                      style: GoogleFonts.manrope(
-                        color: Colors.grey.shade700,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
+                    child: Text("Back to Review",
+                        style: GoogleFonts.manrope(color: Colors.grey.shade700, fontWeight: FontWeight.w600)),
                   ),
                 ),
               ],
@@ -559,110 +472,10 @@ class _PaymentScreenState extends State<PaymentScreen> {
   void _openPaymentInBrowser(String paymentUrl) async {
     final uri = Uri.parse(paymentUrl);
     if (await canLaunchUrl(uri)) {
-      await launchUrl(
-        uri,
-        mode: LaunchMode.externalApplication,
-      );
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Could not open payment page")),
-      );
-    }
-  }
-
-  void _simulatePaymentSuccess(String paymentId) {
-    // This is for testing purposes only - remove in production
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(
-          "Test Payment",
-          style: GoogleFonts.manrope(fontWeight: FontWeight.bold),
-        ),
-        content: Text(
-          "This will simulate a successful payment for testing purposes.",
-          style: GoogleFonts.manrope(),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text(
-              "Cancel",
-              style: GoogleFonts.manrope(color: Colors.grey.shade600),
-            ),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(context);
-              _paymentBloc.add(ProcessPaymentSuccess(
-                paymentId: paymentId,
-                paymentToken: "test_token_${DateTime.now().millisecondsSinceEpoch}",
-                paymentDetails: {
-                  'test': true,
-                  'timestamp': DateTime.now().toIso8601String(),
-                },
-              ));
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.green,
-            ),
-            child: Text(
-              "Confirm Test Payment",
-              style: GoogleFonts.manrope(color: Colors.white),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _handlePaymentCallback(String url, String paymentId) {
-    print("🌐 Handling payment callback: $url with paymentId: $paymentId");
-
-    // Ensure we have a valid paymentId
-    if (paymentId.isEmpty) {
-      print("⚠️ PaymentId is empty, cannot process callback");
-      return;
-    }
-
-    // Handle PayFast callback URLs
-    if (url.contains('payment_status=1') ||
-        url.contains('/payment/success') ||
-        url.contains('success')) {
-
-      // Extract payment details from URL if needed
-      final uri = Uri.parse(url);
-      final paymentToken = uri.queryParameters['pf_payment_id'] ??
-          uri.queryParameters['payment_id'] ??
-          'token_${DateTime.now().millisecondsSinceEpoch}';
-
-      print("✅ Payment successful, processing with paymentId: $paymentId");
-
-      _paymentBloc.add(ProcessPaymentSuccess(
-        paymentId: paymentId,
-        paymentToken: paymentToken,
-        paymentDetails: {
-          'returnUrl': url,
-          'timestamp': DateTime.now().toIso8601String(),
-          'queryParams': uri.queryParameters,
-        },
-      ));
-    } else if (url.contains('payment_status=2') ||
-        url.contains('/payment/cancel') ||
-        url.contains('cancel')) {
-
-      _paymentBloc.add(ProcessPaymentFailure(
-        paymentId: paymentId,
-        error: "Payment was cancelled by user",
-      ));
-    } else if (url.contains('payment_status=0') ||
-        url.contains('/payment/failure') ||
-        url.contains('failed')) {
-
-      _paymentBloc.add(ProcessPaymentFailure(
-        paymentId: paymentId,
-        error: "Payment failed. Please try again.",
-      ));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text("Could not open payment page")));
     }
   }
 }
