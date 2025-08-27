@@ -1,5 +1,6 @@
-// lib/presentation/payment/pages/payment_screen.dart - NAVIGATE TO MAIN NAVIGATION (ITN-DRIVEN)
+// lib/presentation/payments/pages/payment_screen.dart - WITH DEBUG HELPER
 import 'dart:async';
+import 'package:flutter/foundation.dart'; // Add this import
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -15,6 +16,7 @@ import '../../../features/payment/logic/payment_event.dart';
 import '../../../features/payment/logic/payment_state.dart';
 import '../../../services/pricing_service.dart';
 import '../../../main_navigation.dart';
+import '../../../utils/payment_debug_helper.dart'; // Add this import
 
 class PaymentScreen extends StatefulWidget {
   final Map<String, dynamic> bookingData;
@@ -36,6 +38,8 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
   String _currentPaymentId = '';
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _statusSub;
+  StreamSubscription<String>? _debugSub; // Add debug subscription
+  bool _dialogShown = false;
 
   @override
   void initState() {
@@ -51,8 +55,27 @@ class _PaymentScreenState extends State<PaymentScreen> {
     _priceBreakdown = PricingService.calculatePrice(widget.bookingData);
     _initializeWebView();
 
+    // ADD DEBUG HELPERS - Only in debug mode
+    if (kDebugMode) {
+      _initializeDebugHelpers();
+    }
+
     // Kick off payment creation after first frame
     WidgetsBinding.instance.addPostFrameCallback((_) => _initiatePayment());
+  }
+
+  // ADD THIS METHOD
+  void _initializeDebugHelpers() {
+    print("🔧 Initializing debug helpers...");
+
+    // Print payment configuration
+    PaymentDebugHelper.printPaymentConfig();
+
+    // Test URL parsing
+    PaymentDebugHelper.testUrlParsing();
+
+    // Test Cloud Function health
+    PaymentDebugHelper.testCloudFunctionHealth();
   }
 
   void _initializeWebView() {
@@ -61,27 +84,130 @@ class _PaymentScreenState extends State<PaymentScreen> {
       ..setNavigationDelegate(
         NavigationDelegate(
           onProgress: (int progress) {
-            print("🌐 WebView loading progress: $progress%");
+            if (kDebugMode) print("🌐 WebView loading progress: $progress%");
           },
           onPageStarted: (String url) {
-            print("🌐 Payment page started loading: $url");
+            if (kDebugMode) print("🌐 Payment page started loading: $url");
+            _handleNavigationUrl(url);
           },
           onPageFinished: (String url) {
-            print("🌐 Payment page finished loading: $url");
+            if (kDebugMode) print("🌐 Payment page finished loading: $url");
+            _handleNavigationUrl(url);
           },
           onNavigationRequest: (NavigationRequest request) {
-            // We no longer try to interpret success/failure from the URL.
-            // ITN webhook will flip status in Firestore; we just allow navigation.
-            print("🌐 Navigation request: ${request.url}");
+            if (kDebugMode) print("🌐 Navigation request: ${request.url}");
+            _handleNavigationUrl(request.url);
             return NavigationDecision.navigate;
           },
         ),
       );
   }
 
+  // Enhanced navigation URL handling with debug info
+  void _handleNavigationUrl(String url) {
+    if (_dialogShown) return;
+
+    if (kDebugMode) print("🔍 Analyzing URL: $url");
+
+    // FIXED: Only check return/success URLs, not the initial process URL
+    if (url.contains('payment/return') ||
+        url.contains('/return') ||
+        url.contains('success=true') ||
+        url.contains('payment_status=1')) {
+      if (kDebugMode) print("✅ Detected successful payment URL");
+      _showLoadingAndWaitForITN("Payment successful! Confirming...");
+    }
+
+    // FIXED: Only check cancel URLs, not process URLs
+    else if (url.contains('payment/cancel') ||
+        url.contains('/cancel') ||
+        url.contains('cancelled=true') ||
+        url.contains('payment_status=2')) {
+      if (kDebugMode) print("🚫 Detected cancelled payment URL");
+      _showPaymentCancelledDialog();
+    }
+
+    // FIXED: Only check failure URLs
+    else if (url.contains('payment/failure') ||
+        url.contains('/failure') ||
+        url.contains('failed=true') ||
+        url.contains('payment_status=0')) {
+      if (kDebugMode) print("❌ Detected failed payment URL");
+      _showFailureSnack("Payment failed. Please try again.");
+    }
+
+    // DON'T trigger anything for the initial process URL
+    else if (url.contains('sandbox.payfast.co.za/eng/process')) {
+      if (kDebugMode) print("📄 PayFast process page loaded normally");
+      // Do nothing - this is just the payment form loading
+    }
+  }
+  void _showLoadingAndWaitForITN(String message) {
+    if (_dialogShown) return;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const CircularProgressIndicator(color: Color(0xFF1CABE3)),
+            const SizedBox(height: 16),
+            Text(
+              message,
+              style: GoogleFonts.manrope(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              "Please wait while we confirm your payment...",
+              textAlign: TextAlign.center,
+              style: GoogleFonts.manrope(
+                fontSize: 12,
+                color: Colors.grey.shade600,
+              ),
+            ),
+            // ADD DEBUG INFO IN DEBUG MODE
+            if (kDebugMode && _currentPaymentId.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.blue.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(
+                  "Debug: Monitoring $_currentPaymentId",
+                  style: GoogleFonts.manrope(
+                    fontSize: 10,
+                    color: Colors.blue,
+
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+
+    // Set a timeout for ITN processing
+    Timer(const Duration(seconds: 30), () {
+      if (mounted && !_dialogShown) {
+        Navigator.of(context, rootNavigator: true).pop();
+        _checkPaymentStatusManually();
+      }
+    });
+  }
+
   @override
   void dispose() {
     _statusSub?.cancel();
+    _debugSub?.cancel(); // Cancel debug subscription
     _paymentBloc.close();
     super.dispose();
   }
@@ -95,34 +221,106 @@ class _PaymentScreenState extends State<PaymentScreen> {
   }
 
   void _startMonitoringPayment(String paymentId) {
+    if (kDebugMode) print("👀 Starting to monitor payment: $paymentId");
+
     _statusSub?.cancel();
+    _debugSub?.cancel();
+
+    // Regular status monitoring
     _statusSub = FirebaseFirestore.instance
         .collection('payments')
         .doc(paymentId)
         .snapshots()
         .listen((snap) {
-      if (!snap.exists) return;
+      if (!mounted) return;
+
+      if (!snap.exists) {
+        if (kDebugMode) print("⚠️ Payment document not found: $paymentId");
+        return;
+      }
+
       final data = snap.data()!;
       final status = (data['status'] ?? '').toString().toLowerCase();
+      final timestamp = data['updatedAt']?.toDate() ?? DateTime.now();
 
-      print("👀 Payment $paymentId status update: $status");
+      if (kDebugMode) {
+        print("📊 Payment $paymentId status: $status at ${timestamp.toIso8601String()}");
+      }
 
-      if (status == 'completed') {
-        // Close the WebView page and show success
-        _showPaymentSuccessDialog(paymentId);
-      } else if (status == 'failed' || status == 'cancelled') {
-        _showFailureSnack(
-          status == 'failed'
-              ? "Payment failed. Please try again."
-              : "Payment was cancelled.",
-        );
+      // Only process if not already shown a dialog
+      if (!_dialogShown) {
+        if (status == 'completed') {
+          if (kDebugMode) print("🎉 Payment completed - showing success dialog");
+          _showPaymentSuccessDialog(paymentId, data);
+        } else if (status == 'failed') {
+          if (kDebugMode) print("💥 Payment failed");
+          _showFailureSnack("Payment failed. Please try again.");
+        } else if (status == 'cancelled') {
+          if (kDebugMode) print("🚫 Payment cancelled");
+          _showPaymentCancelledDialog();
+        }
+      }
+    }, onError: (error) {
+      if (kDebugMode) print("❌ Error monitoring payment: $error");
+      if (!_dialogShown) {
+        _showFailureSnack("Error monitoring payment status");
       }
     });
+
+    // ADD DEBUG MONITORING - Only in debug mode
+    if (kDebugMode) {
+      _debugSub = PaymentDebugHelper.monitorPaymentDebug(paymentId).listen((status) {
+        print("🐛 Debug Monitor: $status");
+      });
+    }
   }
 
-  void _showPaymentSuccessDialog(String paymentId) {
-    // Stop listening once we've completed
+  void _checkPaymentStatusManually() async {
+    if (_currentPaymentId.isEmpty) return;
+
+    if (kDebugMode) print("🔍 Manually checking payment status for: $_currentPaymentId");
+
+    try {
+      final result = await _repo.verifyPayment(_currentPaymentId);
+
+      if (result.verified) {
+        final paymentDoc = await FirebaseFirestore.instance
+            .collection('payments')
+            .doc(_currentPaymentId)
+            .get();
+
+        if (paymentDoc.exists) {
+          _showPaymentSuccessDialog(_currentPaymentId, paymentDoc.data()!);
+        } else {
+          _showPaymentSuccessDialog(_currentPaymentId, {});
+        }
+      } else {
+        _showFailureSnack("Payment verification failed. Please contact support.");
+      }
+    } catch (e) {
+      if (kDebugMode) print("❌ Manual payment check failed: $e");
+      _showFailureSnack("Unable to verify payment status");
+    }
+  }
+
+  void _showPaymentSuccessDialog(String paymentId, Map<String, dynamic> paymentData) {
+    if (_dialogShown) return;
+    _dialogShown = true;
+
+    // Stop monitoring and close any existing dialogs
     _statusSub?.cancel();
+    _debugSub?.cancel();
+
+    // Close loading dialog if open
+    if (Navigator.canPop(context)) {
+      Navigator.of(context, rootNavigator: true).pop();
+    }
+
+    // Extract booking ID if available
+    String bookingId = paymentId;
+    if (paymentData.containsKey('bookingId')) {
+      bookingId = paymentData['bookingId'];
+    }
 
     showDialog(
       context: context,
@@ -143,7 +341,11 @@ class _PaymentScreenState extends State<PaymentScreen> {
             const SizedBox(height: 16),
             Text(
               "Payment Successful!",
-              style: GoogleFonts.manrope(fontSize: 20, fontWeight: FontWeight.bold),
+              style: GoogleFonts.manrope(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+                color: Colors.green,
+              ),
             ),
             const SizedBox(height: 8),
             Text(
@@ -151,13 +353,43 @@ class _PaymentScreenState extends State<PaymentScreen> {
               textAlign: TextAlign.center,
               style: GoogleFonts.manrope(color: Colors.grey.shade600),
             ),
-            const SizedBox(height: 8),
-            Text(
-              // Show the Payment ID (booking ID is created server-side; you can fetch it on the next screen)
-              "Payment ID: ${paymentId.substring(0, 8).toUpperCase()}",
-              style: GoogleFonts.manrope(
-                fontWeight: FontWeight.bold,
-                color: const Color(0xFF1CABE3),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.green.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Column(
+                children: [
+                  Text(
+                    "Payment ID",
+                    style: GoogleFonts.manrope(
+                      fontSize: 12,
+                      color: Colors.grey.shade600,
+                    ),
+                  ),
+                  Text(
+                    paymentId.substring(0, 8).toUpperCase(),
+                    style: GoogleFonts.manrope(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.green,
+                      fontSize: 16,
+                    ),
+                  ),
+                  // ADD DEBUG INFO
+                  if (kDebugMode) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      "Full ID: $paymentId",
+                      style: GoogleFonts.manrope(
+                        fontSize: 8,
+                        color: Colors.grey,
+
+                      ),
+                    ),
+                  ],
+                ],
               ),
             ),
           ],
@@ -175,12 +407,17 @@ class _PaymentScreenState extends State<PaymentScreen> {
                 );
               },
               style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF1CABE3),
+                backgroundColor: Colors.green,
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                padding: const EdgeInsets.symmetric(vertical: 16),
               ),
               child: Text(
                 "Go to Home",
-                style: GoogleFonts.manrope(color: Colors.white, fontWeight: FontWeight.bold),
+                style: GoogleFonts.manrope(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
               ),
             ),
           ),
@@ -189,8 +426,109 @@ class _PaymentScreenState extends State<PaymentScreen> {
     );
   }
 
-  void _showFailureSnack(String message) {
+  void _showPaymentCancelledDialog() {
+    if (_dialogShown) return;
+    _dialogShown = true;
+
     _statusSub?.cancel();
+    _debugSub?.cancel();
+
+    // Close loading dialog if open
+    if (Navigator.canPop(context)) {
+      Navigator.of(context, rootNavigator: true).pop();
+    }
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.orange.withOpacity(0.1),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.cancel_outlined, color: Colors.orange, size: 32),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              "Payment Cancelled",
+              style: GoogleFonts.manrope(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+                color: Colors.orange,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              "Your payment was cancelled. You can try again or choose a different payment method.",
+              textAlign: TextAlign.center,
+              style: GoogleFonts.manrope(color: Colors.grey.shade600),
+            ),
+          ],
+        ),
+        actions: [
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: () {
+                    Navigator.pop(context); // Close dialog
+                    Navigator.pop(context); // Go back to review screen
+                  },
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: Colors.orange),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                  child: Text(
+                    "Back to Review",
+                    style: GoogleFonts.manrope(
+                      color: Colors.orange,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: ElevatedButton(
+                  onPressed: () {
+                    Navigator.pop(context); // Close dialog
+                    _dialogShown = false; // Reset flag
+                    _initiatePayment(); // Retry payment
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF1CABE3),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                  child: Text(
+                    "Try Again",
+                    style: GoogleFonts.manrope(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showFailureSnack(String message) {
+    if (_dialogShown) return;
+
+    _statusSub?.cancel();
+    _debugSub?.cancel();
+
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Row(
@@ -203,6 +541,15 @@ class _PaymentScreenState extends State<PaymentScreen> {
         backgroundColor: Colors.red,
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        duration: const Duration(seconds: 5),
+        action: SnackBarAction(
+          label: 'Retry',
+          textColor: Colors.white,
+          onPressed: () {
+            _dialogShown = false; // Reset flag
+            _initiatePayment();
+          },
+        ),
       ),
     );
   }
@@ -217,7 +564,11 @@ class _PaymentScreenState extends State<PaymentScreen> {
           title: Text("Secure Payment", style: GoogleFonts.manrope(fontWeight: FontWeight.bold)),
           leading: IconButton(
             icon: const Icon(Icons.arrow_back),
-            onPressed: () => Navigator.pop(context),
+            onPressed: () {
+              _statusSub?.cancel();
+              _debugSub?.cancel();
+              Navigator.pop(context);
+            },
           ),
           backgroundColor: Colors.white,
           elevation: 0,
@@ -226,7 +577,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
           listener: (context, state) {
             if (state is PaymentReady) {
               _currentPaymentId = state.paymentId;
-              print("💾 Stored payment ID: $_currentPaymentId");
+              if (kDebugMode) print("💾 Stored payment ID: $_currentPaymentId");
               _startMonitoringPayment(_currentPaymentId);
             } else if (state is PaymentFailed) {
               _showFailureSnack(state.error);
@@ -252,6 +603,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
     );
   }
 
+  // Rest of your existing build methods remain the same...
   Widget _buildLoadingContent(String message) {
     return Center(
       child: Column(
@@ -306,7 +658,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
     return Column(
       children: [
-        // Payment header
+        // Payment header with status indicator
         Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
@@ -317,37 +669,66 @@ class _PaymentScreenState extends State<PaymentScreen> {
             ),
             border: Border(bottom: BorderSide(color: Colors.grey.shade200)),
           ),
-          child: Row(
+          child: Column(
             children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(color: Colors.green, borderRadius: BorderRadius.circular(8)),
-                child: const Icon(Icons.security, color: Colors.white, size: 20),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text("Secure Payment Gateway",
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.green,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Icon(Icons.security, color: Colors.white, size: 20),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text("Secure Payment Gateway",
+                          style: GoogleFonts.manrope(
+                            color: const Color(0xFF1CABE3),
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14,
+                          ),
+                        ),
+                        Text("Amount: ${PricingService.formatPrice(_priceBreakdown.total)}",
+                          style: GoogleFonts.manrope(color: Colors.grey.shade600, fontSize: 12),
+                        ),
+                      ],
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () => _openPaymentInBrowser(paymentUrl),
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    ),
+                    child: Text(
+                      "Open in Browser",
                       style: GoogleFonts.manrope(
                         color: const Color(0xFF1CABE3),
-                        fontWeight: FontWeight.bold,
-                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 12,
                       ),
                     ),
-                    Text("Amount: ${PricingService.formatPrice(_priceBreakdown.total)}",
-                      style: GoogleFonts.manrope(color: Colors.grey.shade600, fontSize: 12),
-                    ),
-                  ],
-                ),
+                  ),
+                ],
               ),
-              TextButton(
-                onPressed: () => _openPaymentInBrowser(paymentUrl),
-                style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6)),
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.blue.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(20),
+                ),
                 child: Text(
-                  "Open in Browser",
-                  style: GoogleFonts.manrope(color: const Color(0xFF1CABE3), fontWeight: FontWeight.w600, fontSize: 12),
+                  "Monitoring payment status: $paymentId",
+                  style: GoogleFonts.manrope(
+                    fontSize: 10,
+                    color: const Color(0xFF1CABE3),
+                    fontWeight: FontWeight.w500,
+                  ),
                 ),
               ),
             ],
@@ -370,7 +751,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
           ),
         ),
 
-        // Bottom actions
+        // Bottom actions with debug button
         Container(
           padding: const EdgeInsets.all(16),
           decoration: const BoxDecoration(color: Colors.white, boxShadow: [
@@ -382,6 +763,8 @@ class _PaymentScreenState extends State<PaymentScreen> {
                 Expanded(
                   child: OutlinedButton(
                     onPressed: () async {
+                      _statusSub?.cancel();
+                      _debugSub?.cancel();
                       // Optional: mark as cancelled server-side
                       if (_currentPaymentId.isNotEmpty) {
                         await _repo.cancelPayment(_currentPaymentId, "Payment cancelled by user");
@@ -396,6 +779,21 @@ class _PaymentScreenState extends State<PaymentScreen> {
                     child: Text(
                       "Cancel Payment",
                       style: GoogleFonts.manrope(color: Colors.grey.shade700, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () => _checkPaymentStatusManually(),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF1CABE3),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                    child: Text(
+                      "Check Status",
+                      style: GoogleFonts.manrope(color: Colors.white, fontWeight: FontWeight.w600),
                     ),
                   ),
                 ),
@@ -423,7 +821,8 @@ class _PaymentScreenState extends State<PaymentScreen> {
             Text("Payment Failed",
                 style: GoogleFonts.manrope(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.red)),
             const SizedBox(height: 12),
-            Text(state.error, textAlign: TextAlign.center, style: GoogleFonts.manrope(fontSize: 16, color: Colors.grey.shade600)),
+            Text(state.error, textAlign: TextAlign.center,
+                style: GoogleFonts.manrope(fontSize: 16, color: Colors.grey.shade600)),
             const SizedBox(height: 32),
             Column(
               children: [
@@ -432,6 +831,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
                     width: double.infinity,
                     child: ElevatedButton.icon(
                       onPressed: () {
+                        _dialogShown = false; // Reset dialog flag
                         _paymentBloc.add(RetryPayment(
                           bookingData: widget.bookingData,
                           amount: _priceBreakdown.total,
